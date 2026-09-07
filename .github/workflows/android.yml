@@ -1,0 +1,47 @@
+name: Android Release
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK
+        run: yes | sdkmanager "platforms;android-36" "build-tools;35.0.0" || true
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+      - name: Build release APK
+        run: gradle --no-daemon :app:assembleRelease
+      - name: Prepare release files
+        id: prep
+        shell: bash
+        run: |
+          VERSION_NAME=$(grep '^JINKAKU_VERSION_NAME=' gradle.properties | cut -d= -f2)
+          VERSION_CODE=$(grep '^JINKAKU_VERSION_CODE=' gradle.properties | cut -d= -f2)
+          cp app/build/outputs/apk/release/app-release.apk "jinkaku-v${VERSION_NAME}.apk"
+          printf '{"versionName":"%s","versionCode":%s,"apk":"jinkaku-v%s.apk"}\n' "$VERSION_NAME" "$VERSION_CODE" "$VERSION_NAME" > version.json
+          echo "version=$VERSION_NAME" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jinkaku-apk
+          path: jinkaku-v*.apk
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v${{ steps.prep.outputs.version }}"
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "Jinkaku $TAG" --notes "Automated personal release." --target "$GITHUB_SHA"
+          gh release upload "$TAG" jinkaku-v*.apk version.json --clobber
