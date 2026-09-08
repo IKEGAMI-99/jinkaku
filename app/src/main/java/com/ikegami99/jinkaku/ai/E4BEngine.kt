@@ -32,9 +32,10 @@ class E4BEngine(
 
     private fun tryLoad(model: File, contextSize: Long) {
         unload()
+        InferenceTelemetry.reset(contextSize.toInt(), "LOADING")
         logger.i(
             "E4B",
-            "Loading with upstream llama.cpp CPU runtime ctx=$contextSize jinja=true thinking=false threads=6"
+            "Loading with upstream llama.cpp CPU runtime ctx=$contextSize jinja=true thinking=true threads=6"
         )
         bridge.load(model.absolutePath, contextSize.toInt())
         loadedPath = model.absolutePath
@@ -91,11 +92,12 @@ class E4BEngine(
         }
 
         ensureLoaded(model, contextSize)
+        InferenceTelemetry.reset(loadedContext.toInt(), "PREFILL")
 
         val roles = ArrayList<String>()
         val contents = ArrayList<String>()
         roles += "system"
-        contents += buildDirectSystemPrompt(systemPrompt)
+        contents += systemPrompt
         history.takeLast(MAX_HISTORY_MESSAGES).forEach { message ->
             when (message.role) {
                 ROLE_USER -> {
@@ -116,12 +118,17 @@ class E4BEngine(
         var final = ""
         var rawChars = 0
         var emittedPieces = 0
+        var lastTelemetryMs = 0L
+        var visibleStarted = false
 
-        // CoT is disabled. Switch the UI out of its legacy thinking state before
-        // native prompt prefill starts, so the user does not stare at "THINKING".
-        emit(GenerationEvent.Text(""))
         bridge.begin(roles.toTypedArray(), contents.toTypedArray(), MAX_GENERATION_TOKENS)
-        logger.i("E4B", "Upstream Jinja prompt accepted messages=${roles.size} enableThinking=false maxTokens=$MAX_GENERATION_TOKENS")
+        var nativeStats = bridge.stats()
+        InferenceTelemetry.update(nativeStats, "THINKING")
+        logger.i(
+            "E4B",
+            "Upstream Jinja prompt accepted messages=${roles.size} enableThinking=true maxTokens=${nativeStats.maxGenerationTokens} promptTokens=${nativeStats.promptTokens}"
+        )
+        emit(GenerationEvent.Thinking)
 
         try {
             while (true) {
@@ -135,12 +142,19 @@ class E4BEngine(
                     bridge.stop()
                     break
                 }
-                // CoT is disabled at the Jinja level. Keep this filter only as a
-                // safety net for a model that unexpectedly emits thought markers.
+
                 val visible = filter.accept(chunk)
                 if (visible.isNotEmpty()) {
+                    visibleStarted = true
                     final += visible
                     emit(GenerationEvent.Text(visible))
+                }
+
+                val now = System.currentTimeMillis()
+                if (emittedPieces % TELEMETRY_EVERY_TOKENS == 0 || now - lastTelemetryMs >= TELEMETRY_MAX_INTERVAL_MS) {
+                    nativeStats = bridge.stats()
+                    InferenceTelemetry.update(nativeStats, if (visibleStarted) "DECODE" else "THINKING")
+                    lastTelemetryMs = now
                 }
             }
         } finally {
@@ -154,28 +168,15 @@ class E4BEngine(
         }
 
         val cleaned = cleanControlTokens(final).trim()
+        nativeStats = bridge.stats()
+        InferenceTelemetry.complete(nativeStats, cleaned)
         val elapsed = System.currentTimeMillis() - started
         logger.i(
             "E4B",
-            "Generation complete UPSTREAM_LLAMA_CPP_DIRECT elapsedMs=$elapsed visibleChars=${cleaned.length} rawChars=$rawChars thoughtMarker=${filter.sawThinkingMarker} pieces=$emittedPieces"
+            "Generation complete UPSTREAM_LLAMA_CPP_DIRECT elapsedMs=$elapsed visibleChars=${cleaned.length} rawChars=$rawChars thoughtMarker=${filter.sawThinkingMarker} pieces=$emittedPieces prefillTokS=${InferenceTelemetry.state.value.prefillLabel()} decodeTokS=${InferenceTelemetry.state.value.decodeLabel()} ctx=${nativeStats.contextUsed}/${nativeStats.contextSize}"
         )
         emit(GenerationEvent.Completed(cleaned, elapsed))
     }.flowOn(Dispatchers.Default)
-
-    private fun buildDirectSystemPrompt(systemPrompt: String): String {
-        val stripped = systemPrompt
-            .replace("<|think|>", "")
-            .replace("<think>", "")
-            .replace("</think>", "")
-            .replace(
-                "Think carefully before answering, but keep internal reasoning private. Output only the final answer after thinking.",
-                "Answer directly."
-            )
-            .trim()
-
-        return """Answer directly and begin the answer immediately. Do not generate chain-of-thought, hidden reasoning, analysis/thought channels, or <think> blocks. Keep the response useful and concise unless the user asks for detail.
-$stripped""".trimIndent()
-    }
 
     private fun cleanControlTokens(value: String): String = value
         .replace("<|channel>final", "")
@@ -186,6 +187,7 @@ $stripped""".trimIndent()
 
     fun stop() {
         runCatching { bridge.stop() }
+        InferenceTelemetry.stopped()
     }
 
     fun unload() {
@@ -199,9 +201,11 @@ $stripped""".trimIndent()
     override fun close() = unload()
 
     companion object {
-        private const val MAX_RAW_OUTPUT_CHARS = 16_000
-        private const val MAX_GENERATION_TOKENS = 640
+        private const val MAX_RAW_OUTPUT_CHARS = 24_000
+        private const val MAX_GENERATION_TOKENS = 1024
         private const val MAX_HISTORY_MESSAGES = 4
+        private const val TELEMETRY_EVERY_TOKENS = 4
+        private const val TELEMETRY_MAX_INTERVAL_MS = 500L
     }
 }
 
