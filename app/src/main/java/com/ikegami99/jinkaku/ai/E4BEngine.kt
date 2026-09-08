@@ -2,16 +2,17 @@ package com.ikegami99.jinkaku.ai
 
 import android.app.ActivityManager
 import android.content.Context
-import android.system.Os
 import com.ikegami99.jinkaku.data.ChatMessage
 import com.ikegami99.jinkaku.data.ROLE_ASSISTANT
 import com.ikegami99.jinkaku.data.ROLE_USER
 import com.ikegami99.jinkaku.logging.AppLogger
-import io.aatricks.llmedge.text.runtime.SmolLM
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import java.io.File
 
 sealed interface GenerationEvent {
@@ -25,58 +26,24 @@ class E4BEngine(
     @Suppress("unused") private val scope: CoroutineScope,
     private val logger: AppLogger
 ) : AutoCloseable {
-    private var runtime: SmolLM? = null
+    private val bridge = UpstreamLlamaBridge()
     private var loadedPath: String? = null
     private var loadedContext: Long = -1L
 
-    private suspend fun tryLoad(model: File, contextSize: Long): SmolLM {
+    private fun tryLoad(model: File, contextSize: Long) {
         unload()
-        runCatching { Os.setenv("GGML_DISABLE_VULKAN", "1", true) }
-        runCatching { Os.setenv("GGML_DISABLE_OPENCL", "1", true) }
         logger.i(
             "E4B",
-            "Creating direct SmolLM CPU runtime ctx=$contextSize kv=F16/F16 jinja=model-metadata env=${System.getenv("GGML_DISABLE_VULKAN")}/${System.getenv("GGML_DISABLE_OPENCL")}"
+            "Loading with upstream llama.cpp CPU runtime ctx=$contextSize jinja=true thinking=true"
         )
-        val smol = SmolLM(useVulkan = false)
-        try {
-            smol.load(
-                model.absolutePath,
-                SmolLM.InferenceParams(
-                    temperature = 1.0f,
-                    storeChats = true,
-                    contextSize = contextSize,
-                    chatTemplate = null,
-                    numThreads = 4,
-                    generationThreads = 2,
-                    useMmap = true,
-                    useMlock = false,
-                    useFlashAttn = false,
-                    thinkingMode = SmolLM.ThinkingMode.DEFAULT,
-                    reasoningBudget = -1,
-                    kvCacheTypeK = SmolLM.KvCacheType.F16,
-                    kvCacheTypeV = SmolLM.KvCacheType.F16,
-                    nGpuLayers = 0,
-                    nUbatch = 32
-                )
-            )
-            logger.i(
-                "E4B",
-                "CPU model loaded ctx=$contextSize vulkanEnabled=${smol.isVulkanEnabled()} estimatedNative=${smol.getEstimatedNativeMemoryBytes()} estimatedState=${smol.getEstimatedStateMemoryBytes()}"
-            )
-            runtime = smol
-            loadedPath = model.absolutePath
-            loadedContext = contextSize
-            return smol
-        } catch (t: Throwable) {
-            runCatching { smol.close() }
-            logger.e("E4B", "CPU load failed ctx=$contextSize", t)
-            throw t
-        }
+        bridge.load(model.absolutePath, contextSize.toInt())
+        loadedPath = model.absolutePath
+        loadedContext = contextSize
+        logger.i("E4B", "Upstream llama.cpp model loaded ctx=$contextSize")
     }
 
-    private suspend fun ensureLoaded(model: File, requestedContext: Long): SmolLM {
-        val existing = runtime
-        if (existing != null && loadedPath == model.absolutePath) return existing
+    private fun ensureLoaded(model: File, requestedContext: Long) {
+        if (loadedPath == model.absolutePath && loadedContext in 1024L..2048L) return
 
         val attempts = linkedSetOf(
             requestedContext.coerceIn(1024L, 2048L),
@@ -86,14 +53,16 @@ class E4BEngine(
         var last: Throwable? = null
         for (ctx in attempts) {
             try {
-                return tryLoad(model, ctx)
+                tryLoad(model, ctx)
+                return
             } catch (t: Throwable) {
                 last = t
+                logger.e("E4B", "Upstream llama.cpp load failed ctx=$ctx", t)
                 logger.w("E4B", "Context creation failed at $ctx; trying smaller profile")
             }
         }
         throw IllegalStateException(
-            "E4BをCPUで読み込めませんでした。Q4_K_Mではメモリ不足の可能性があります。モデル管理からQ2_K_P版を使用してください。",
+            "E4Bをupstream llama.cppで読み込めませんでした。Q4_K_Mでメモリ不足の場合はQ2_K_Pを試してください。",
             last
         )
     }
@@ -111,7 +80,7 @@ class E4BEngine(
         (context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager).getMemoryInfo(memoryInfo)
         logger.i(
             "E4B",
-            "Generation start CPU_ONLY model=${model.name} size=${model.length()} requestedCtx=$contextSize history=${history.size} availMem=${memoryInfo.availMem} lowMemory=${memoryInfo.lowMemory}"
+            "Generation start UPSTREAM_LLAMA_CPP model=${model.name} size=${model.length()} requestedCtx=$contextSize history=${history.size} availMem=${memoryInfo.availMem} lowMemory=${memoryInfo.lowMemory}"
         )
 
         if (memoryInfo.lowMemory || memoryInfo.availMem < 3_500_000_000L) {
@@ -121,44 +90,57 @@ class E4BEngine(
             logger.w("E4B", "Model file is larger than current available RAM; Q2_K_P is recommended")
         }
 
-        val smol = ensureLoaded(model, contextSize)
-        smol.clearMessages()
-        smol.clearKvCache()
+        ensureLoaded(model, contextSize)
 
-        val thinkingSystem = if (systemPrompt.trimStart().startsWith("<|think|>")) {
-            systemPrompt
-        } else {
-            "<|think|>\n$systemPrompt"
-        }
-        smol.addSystemPrompt(thinkingSystem)
-        history.forEach { message ->
+        val roles = ArrayList<String>()
+        val contents = ArrayList<String>()
+        roles += "system"
+        contents += systemPrompt
+        history.takeLast(MAX_HISTORY_MESSAGES).forEach { message ->
             when (message.role) {
-                ROLE_USER -> smol.addUserMessage(message.content)
-                ROLE_ASSISTANT -> smol.addAssistantMessage(message.content)
+                ROLE_USER -> {
+                    roles += "user"
+                    contents += message.content
+                }
+                ROLE_ASSISTANT -> {
+                    roles += "assistant"
+                    contents += message.content
+                }
             }
         }
+        roles += "user"
+        contents += currentUserMessage
 
         val started = System.currentTimeMillis()
         val filter = ThinkingFilter()
         var final = ""
         var rawChars = 0
-        var stopRequested = false
+        var emittedPieces = 0
 
+        bridge.begin(roles.toTypedArray(), contents.toTypedArray(), MAX_GENERATION_TOKENS)
+        logger.i("E4B", "Upstream Jinja prompt accepted messages=${roles.size} enableThinking=true")
         emit(GenerationEvent.Thinking)
 
-        smol.getResponseAsFlow(currentUserMessage, Dispatchers.Default, 1).collect { chunk ->
-            if (chunk == "[EOG]") return@collect
-            rawChars += chunk.length
-            if (!stopRequested && rawChars > MAX_RAW_OUTPUT_CHARS) {
-                stopRequested = true
-                logger.w("E4B", "Generation safety cap reached rawChars=$rawChars; stopping completion")
-                runCatching { smol.stopCompletion() }
+        try {
+            while (true) {
+                currentCoroutineContext().ensureActive()
+                val bytes = bridge.nextTokenBytes() ?: break
+                val chunk = bytes.toString(Charsets.UTF_8)
+                rawChars += chunk.length
+                emittedPieces++
+                if (rawChars > MAX_RAW_OUTPUT_CHARS) {
+                    logger.w("E4B", "Generation safety cap reached rawChars=$rawChars; stopping")
+                    bridge.stop()
+                    break
+                }
+                val visible = filter.accept(chunk)
+                if (visible.isNotEmpty()) {
+                    final += visible
+                    emit(GenerationEvent.Text(visible))
+                }
             }
-            val visible = filter.accept(chunk)
-            if (visible.isNotEmpty()) {
-                final += visible
-                emit(GenerationEvent.Text(visible))
-            }
+        } finally {
+            bridge.stop()
         }
 
         val tail = filter.finish()
@@ -169,28 +151,29 @@ class E4BEngine(
 
         val cleaned = cleanControlTokens(final).trim()
         val elapsed = System.currentTimeMillis() - started
-        val metrics = runCatching { smol.getLastGenerationMetrics() }.getOrNull()
         logger.i(
             "E4B",
-            "Generation complete elapsedMs=$elapsed visibleChars=${cleaned.length} rawChars=$rawChars thoughtMarker=${filter.sawThinkingMarker} tokens=${metrics?.tokenCount ?: -1} tokS=${metrics?.tokensPerSecond ?: -1f}"
+            "Generation complete UPSTREAM_LLAMA_CPP elapsedMs=$elapsed visibleChars=${cleaned.length} rawChars=$rawChars thoughtMarker=${filter.sawThinkingMarker} pieces=$emittedPieces"
         )
         emit(GenerationEvent.Completed(cleaned, elapsed))
-    }
+    }.flowOn(Dispatchers.Default)
 
     private fun cleanControlTokens(value: String): String = value
         .replace("<|channel>final", "")
         .replace("<|turn>model", "")
         .replace("<turn|>", "")
         .replace("<|eot_id|>", "")
+        .replace("<|end_of_text|>", "")
+
+    fun stop() {
+        runCatching { bridge.stop() }
+    }
 
     fun unload() {
-        val old = runtime
-        runtime = null
         loadedPath = null
         loadedContext = -1L
-        if (old != null) {
-            runCatching { old.close() }.onFailure { logger.e("E4B", "CPU runtime close failed", it) }
-        }
+        runCatching { bridge.unload() }
+            .onFailure { logger.e("E4B", "upstream llama.cpp runtime close failed", it) }
         logger.i("E4B", "Runtime unloaded")
     }
 
@@ -198,6 +181,8 @@ class E4BEngine(
 
     companion object {
         private const val MAX_RAW_OUTPUT_CHARS = 16_000
+        private const val MAX_GENERATION_TOKENS = 512
+        private const val MAX_HISTORY_MESSAGES = 6
     }
 }
 
