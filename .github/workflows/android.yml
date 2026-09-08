@@ -56,9 +56,10 @@ jobs:
           rm -rf /tmp/Vulkan-Headers
           git clone --depth 1 https://github.com/KhronosGroup/Vulkan-Headers.git /tmp/Vulkan-Headers
           mkdir -p "$SYSROOT/usr/include"
-          rm -rf "$SYSROOT/usr/include/vulkan"
-          cp -r /tmp/Vulkan-Headers/include/vulkan "$SYSROOT/usr/include/"
+          rm -rf "$SYSROOT/usr/include/vulkan" "$SYSROOT/usr/include/vk_video"
+          cp -r /tmp/Vulkan-Headers/include/vulkan /tmp/Vulkan-Headers/include/vk_video "$SYSROOT/usr/include/"
           test -f "$SYSROOT/usr/include/vulkan/vulkan.hpp"
+          test -f "$SYSROOT/usr/include/vk_video/vulkan_video_codec_av1std.h"
       - name: Prepare Android OpenCL headers and ICD loader
         shell: bash
         run: |
