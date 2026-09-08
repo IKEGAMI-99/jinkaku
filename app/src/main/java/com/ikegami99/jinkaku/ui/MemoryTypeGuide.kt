@@ -1,15 +1,20 @@
 package com.ikegami99.jinkaku.ui
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -61,15 +66,57 @@ private val memoryGuideItems = listOf(
 
 @Composable
 fun MemoryTypeGuide(modifier: Modifier = Modifier) {
-    Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text("Memory種別の意味と入力例", fontWeight = FontWeight.SemiBold)
-        memoryGuideItems.forEach { item ->
+    var expanded by remember { mutableStateOf(false) }
+
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        OutlinedButton(
+            onClick = { expanded = !expanded },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(if (expanded) "Memory種別と入力例を閉じる ▲" else "Memory種別と入力例を見る ▼")
+        }
+
+        if (expanded) {
+            Text(
+                "どの種類に入れるか迷った時の目安です。意味が近いものを選べば十分です。",
+                style = MaterialTheme.typography.bodySmall
+            )
+
+            memoryGuideItems.forEach { item ->
+                Card(Modifier.fillMaxWidth()) {
+                    Column(
+                        Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(3.dp)
+                    ) {
+                        Text("${item.key}（${item.japanese}）", fontWeight = FontWeight.SemiBold)
+                        Text(item.meaning, style = MaterialTheme.typography.bodySmall)
+                        Text("入力例: ${item.example}", style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+            }
+
             Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(10.dp)) {
-                    Text("${item.key}（${item.japanese}）", fontWeight = FontWeight.SemiBold)
-                    Text(item.meaning, style = MaterialTheme.typography.bodySmall)
-                    Spacer(Modifier.height(2.dp))
-                    Text("例: ${item.example}", style = MaterialTheme.typography.labelSmall)
+                Column(
+                    Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text("タグについて", fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "タグはMemoryを後から見つけやすくする補助キーワードです。必須ではありません。複数付ける場合はカンマで区切ります。",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Spacer(Modifier.height(1.dp))
+                    Text(
+                        "例: local-ai, jinkaku, android, speed",
+                        style = MaterialTheme.typography.labelSmall
+                    )
+                    Text(
+                        "本文と同じ言葉を無理に繰り返す必要はありません。プロジェクト名、端末名、人物名、用途などを付けると検索補助になります。",
+                        style = MaterialTheme.typography.labelSmall
+                    )
                 }
             }
         }
