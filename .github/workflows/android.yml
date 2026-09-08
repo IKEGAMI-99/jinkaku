@@ -28,12 +28,14 @@ jobs:
             "build-tools;35.0.0" \
             "ndk;29.0.13113456" \
             "cmake;3.31.6" || true
-      - name: Apply CPU KV/prefill optimization patch
-        run: python3 scripts/patch_cpu_speed_v022.py
+      - name: Apply CPU runtime patches
+        run: |
+          python3 scripts/patch_cpu_speed_v022.py
+          python3 scripts/patch_v024_thinking_idle_memory.py
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
-      - name: Build Q2-ready CPU release APK
+      - name: Build Thinking-toggle CPU release APK
         run: gradle --no-daemon :app:assembleRelease
       - name: Prepare release files
         id: prep
