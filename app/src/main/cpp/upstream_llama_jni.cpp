@@ -248,7 +248,7 @@ Java_com_ikegami99_jinkaku_ai_UpstreamLlamaBridge_nativeLoad(JNIEnv * env, jobje
             return error_string(env, "llama_model_get_vocab returned null");
         }
 
-        const int32_t ctx = std::clamp(static_cast<int32_t>(contextSize), 1024, 2048);
+        const int32_t ctx = std::clamp(static_cast<int32_t>(contextSize), 1024, 8192);
         llama_context_params cparams = llama_context_default_params();
         cparams.n_ctx = static_cast<uint32_t>(ctx);
         cparams.n_batch = 256;
