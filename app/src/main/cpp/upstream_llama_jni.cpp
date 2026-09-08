@@ -199,9 +199,9 @@ Java_com_ikegami99_jinkaku_ai_UpstreamLlamaBridge_nativeLoad(JNIEnv * env, jobje
         llama_context_params cparams = llama_context_default_params();
         cparams.n_ctx = static_cast<uint32_t>(ctx);
         cparams.n_batch = 256;
-        cparams.n_ubatch = 64;
-        cparams.n_threads = 4;
-        cparams.n_threads_batch = 4;
+        cparams.n_ubatch = 128;
+        cparams.n_threads = 6;
+        cparams.n_threads_batch = 6;
 
         g_ctx = llama_init_from_model(g_model, cparams);
         if (!g_ctx) {
@@ -228,7 +228,7 @@ Java_com_ikegami99_jinkaku_ai_UpstreamLlamaBridge_nativeLoad(JNIEnv * env, jobje
         llama_sampler_chain_add(g_sampler, llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
 
         g_stop.store(false, std::memory_order_relaxed);
-        LOGI("model loaded with upstream llama.cpp ctx=%d", ctx);
+        LOGI("model loaded with upstream llama.cpp ctx=%d threads=6 ubatch=128", ctx);
         return nullptr;
     } catch (const std::exception & e) {
         free_model_locked();
@@ -260,7 +260,7 @@ Java_com_ikegami99_jinkaku_ai_UpstreamLlamaBridge_nativeBegin(
         common_chat_templates_inputs inputs;
         inputs.use_jinja = true;
         inputs.add_generation_prompt = true;
-        inputs.enable_thinking = true;
+        inputs.enable_thinking = false;
         inputs.messages.reserve(static_cast<size_t>(roleCount));
 
         for (jsize i = 0; i < roleCount; ++i) {
@@ -294,12 +294,13 @@ Java_com_ikegami99_jinkaku_ai_UpstreamLlamaBridge_nativeBegin(
         llama_sampler_reset(g_sampler);
         g_stop.store(false, std::memory_order_relaxed);
         g_generated = 0;
-        g_max_tokens = std::clamp(static_cast<int32_t>(maxTokens), 16, 768);
+        const int32_t available = std::max(16, g_context_size - tokenized - 4);
+        g_max_tokens = std::min(std::clamp(static_cast<int32_t>(maxTokens), 16, 768), available);
 
         const std::string decodeError = decode_prompt(tokens);
         if (!decodeError.empty()) return error_string(env, decodeError);
 
-        LOGI("generation begun promptTokens=%d maxTokens=%d", tokenized, g_max_tokens);
+        LOGI("generation begun promptTokens=%d maxTokens=%d thinking=false", tokenized, g_max_tokens);
         return nullptr;
     } catch (const std::exception & e) {
         return error_string(env, std::string("native begin exception: ") + e.what());
