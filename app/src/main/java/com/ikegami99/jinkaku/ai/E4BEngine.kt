@@ -27,24 +27,35 @@ class E4BEngine(
     private val logger: AppLogger
 ) : AutoCloseable {
     private val bridge = UpstreamLlamaBridge()
+    private val backendPrefs = BackendPreferences(context)
     private var loadedPath: String? = null
     private var loadedContext: Long = -1L
+    private var loadedBackendSignature: String = ""
 
-    private fun tryLoad(model: File, contextSize: Long) {
+    private fun tryLoad(model: File, contextSize: Long, config: BackendConfig) {
         unload()
         InferenceTelemetry.reset(contextSize.toInt(), "LOADING")
         logger.i(
             "E4B",
-            "Loading with upstream llama.cpp CPU runtime ctx=$contextSize jinja=true thinking=true threads=6"
+            "Loading upstream llama.cpp ctx=$contextSize backend=${config.mode.name} gpuLayers=${config.gpuLayers} jinja=true thinking=true threads=6"
         )
-        bridge.load(model.absolutePath, contextSize.toInt())
+        bridge.load(model.absolutePath, contextSize.toInt(), config.mode, config.gpuLayers)
         loadedPath = model.absolutePath
         loadedContext = contextSize
-        logger.i("E4B", "Upstream llama.cpp model loaded ctx=$contextSize")
+        loadedBackendSignature = config.signature
+        logger.i(
+            "E4B",
+            "Upstream llama.cpp model loaded ctx=$contextSize configured=${config.mode.name} actual=${bridge.backend()} gpuLayers=${config.gpuLayers}"
+        )
     }
 
     private fun ensureLoaded(model: File, requestedContext: Long) {
-        if (loadedPath == model.absolutePath && loadedContext in 1024L..8192L) return
+        val desired = backendPrefs.get()
+        if (
+            loadedPath == model.absolutePath &&
+            loadedContext in 1024L..8192L &&
+            loadedBackendSignature == desired.signature
+        ) return
 
         val requested = requestedContext.coerceIn(1024L, 8192L)
         val attempts = linkedSetOf<Long>()
@@ -56,16 +67,35 @@ class E4BEngine(
         var last: Throwable? = null
         for (ctx in attempts) {
             try {
-                tryLoad(model, ctx)
+                tryLoad(model, ctx, desired)
                 return
             } catch (t: Throwable) {
                 last = t
-                logger.e("E4B", "Upstream llama.cpp load failed ctx=$ctx", t)
-                logger.w("E4B", "Context creation failed at $ctx; trying smaller profile")
+                logger.e("E4B", "Backend ${desired.mode.name} load failed ctx=$ctx", t)
             }
         }
+
+        if (desired.mode != InferenceBackend.CPU) {
+            logger.w("E4B", "${desired.mode.name} failed for all context profiles; falling back to CPU")
+            val cpu = BackendConfig(InferenceBackend.CPU, desired.gpuLayers)
+            for (ctx in attempts) {
+                try {
+                    tryLoad(model, ctx, cpu)
+                    // Remember the requested signature so Auto/GPU failure does not trigger
+                    // another expensive retry on every message. Changing the selector creates
+                    // a new signature and causes a fresh load attempt.
+                    loadedBackendSignature = desired.signature
+                    logger.w("E4B", "CPU fallback active for requested backend=${desired.mode.name}")
+                    return
+                } catch (t: Throwable) {
+                    last = t
+                    logger.e("E4B", "CPU fallback load failed ctx=$ctx", t)
+                }
+            }
+        }
+
         throw IllegalStateException(
-            "E4Bをupstream llama.cppで読み込めませんでした。大きいContextでメモリ不足の場合は4K/2Kへ下げてください。",
+            "E4Bを読み込めませんでした。GPU/OpenCL利用時はCPUへ自動フォールバックしましたが失敗しました。Contextを下げるかモデルを確認してください。",
             last
         )
     }
@@ -81,9 +111,10 @@ class E4BEngine(
 
         val memoryInfo = ActivityManager.MemoryInfo()
         (context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager).getMemoryInfo(memoryInfo)
+        val requestedBackend = backendPrefs.get()
         logger.i(
             "E4B",
-            "Generation start UPSTREAM_LLAMA_CPP_DIRECT model=${model.name} size=${model.length()} requestedCtx=$contextSize history=${history.size} availMem=${memoryInfo.availMem} lowMemory=${memoryInfo.lowMemory}"
+            "Generation start UPSTREAM_LLAMA_CPP_DIRECT model=${model.name} size=${model.length()} requestedCtx=$contextSize backend=${requestedBackend.mode.name} gpuLayers=${requestedBackend.gpuLayers} history=${history.size} availMem=${memoryInfo.availMem} lowMemory=${memoryInfo.lowMemory}"
         )
 
         if (memoryInfo.lowMemory || memoryInfo.availMem < 3_500_000_000L) {
@@ -128,7 +159,7 @@ class E4BEngine(
         InferenceTelemetry.update(nativeStats, "THINKING")
         logger.i(
             "E4B",
-            "Upstream Jinja prompt accepted messages=${roles.size} enableThinking=true maxTokens=${nativeStats.maxGenerationTokens} promptTokens=${nativeStats.promptTokens}"
+            "Upstream Jinja prompt accepted messages=${roles.size} enableThinking=true maxTokens=${nativeStats.maxGenerationTokens} promptTokens=${nativeStats.promptTokens} backend=${nativeStats.backend}"
         )
         emit(GenerationEvent.Thinking)
 
@@ -175,7 +206,7 @@ class E4BEngine(
         val elapsed = System.currentTimeMillis() - started
         logger.i(
             "E4B",
-            "Generation complete UPSTREAM_LLAMA_CPP_DIRECT elapsedMs=$elapsed visibleChars=${cleaned.length} rawChars=$rawChars thoughtMarker=${filter.sawThinkingMarker} pieces=$emittedPieces prefillTokS=${InferenceTelemetry.state.value.prefillLabel()} decodeTokS=${InferenceTelemetry.state.value.decodeLabel()} ctx=${nativeStats.contextUsed}/${nativeStats.contextSize}"
+            "Generation complete UPSTREAM_LLAMA_CPP_DIRECT elapsedMs=$elapsed visibleChars=${cleaned.length} rawChars=$rawChars thoughtMarker=${filter.sawThinkingMarker} pieces=$emittedPieces backend=${nativeStats.backend} prefillTokS=${InferenceTelemetry.state.value.prefillLabel()} decodeTokS=${InferenceTelemetry.state.value.decodeLabel()} ctx=${nativeStats.contextUsed}/${nativeStats.contextSize}"
         )
         emit(GenerationEvent.Completed(cleaned, elapsed))
     }.flowOn(Dispatchers.Default)
@@ -195,6 +226,7 @@ class E4BEngine(
     fun unload() {
         loadedPath = null
         loadedContext = -1L
+        loadedBackendSignature = ""
         runCatching { bridge.unload() }
             .onFailure { logger.e("E4B", "upstream llama.cpp runtime close failed", it) }
         logger.i("E4B", "Runtime unloaded")
