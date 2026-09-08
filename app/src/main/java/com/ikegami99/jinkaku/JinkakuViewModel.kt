@@ -13,6 +13,7 @@ import com.ikegami99.jinkaku.ai.GenerationEvent
 import com.ikegami99.jinkaku.ai.MemoryEngine
 import com.ikegami99.jinkaku.backup.BackupManager
 import com.ikegami99.jinkaku.data.ChatMessage
+import com.ikegami99.jinkaku.data.ChatSession
 import com.ikegami99.jinkaku.data.JinkakuDatabase
 import com.ikegami99.jinkaku.data.ROLE_ASSISTANT
 import com.ikegami99.jinkaku.data.ROLE_USER
@@ -36,6 +37,8 @@ import java.io.File
 
 data class UiState(
     val messages: List<ChatMessage> = emptyList(),
+    val chats: List<ChatSession> = emptyList(),
+    val currentChatId: Long = -1L,
     val generatingText: String = "",
     val thinking: Boolean = false,
     val busy: Boolean = false,
@@ -49,7 +52,7 @@ data class UiState(
     val e2bImporting: Boolean = false,
     val e4bImportProgress: Float? = null,
     val e2bImportProgress: Float? = null,
-    val contextSize: Long = 4096,
+    val contextSize: Long = 2048,
     val error: String? = null,
     val notice: String? = null,
     val updateInfo: UpdateInfo? = null
@@ -69,15 +72,16 @@ class JinkakuViewModel(app: Application) : AndroidViewModel(app) {
     private var memoryIdleJob: Job? = null
     private val prefs = app.getSharedPreferences("settings", Context.MODE_PRIVATE)
     private val previousInferenceInterrupted = prefs.getBoolean(KEY_E4B_ACTIVE, false)
+    private var currentChatId: Long = resolveInitialChatId()
     private val initialContext: Long = migrateRuntimeProfile()
-    private val _ui = MutableStateFlow(UiState(contextSize = initialContext))
+    private val _ui = MutableStateFlow(UiState(contextSize = initialContext, currentChatId = currentChatId))
     val ui: StateFlow<UiState> = _ui.asStateFlow()
 
     init {
         if (previousInferenceInterrupted) {
             logger.w("E4B", "Previous process ended while E4B inference was active; safe mode enabled")
             _ui.value = _ui.value.copy(
-                notice = "前回E4B推論中にアプリが終了しました。安全のためContextを2Kへ下げました。"
+                notice = "前回E4B推論中にアプリが終了しました。安全のためContextを1Kへ下げました。"
             )
         }
         refresh()
@@ -89,30 +93,40 @@ class JinkakuViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    private fun resolveInitialChatId(): Long {
+        val stored = prefs.getLong(KEY_CURRENT_CHAT_ID, -1L)
+        if (stored > 0L && db.chatExists(stored)) return stored
+        val id = db.ensureInitialChat()
+        prefs.edit().putLong(KEY_CURRENT_CHAT_ID, id).apply()
+        return id
+    }
+
     private fun migrateRuntimeProfile(): Long {
-        var context = prefs.getLong("context", 4096L)
+        var context = prefs.getLong("context", 2048L)
         val profile = prefs.getInt(KEY_RUNTIME_PROFILE_VERSION, 0)
         if (profile < RUNTIME_PROFILE_VERSION) {
-            context = 4096L
+            context = 2048L
             prefs.edit()
                 .putLong("context", context)
                 .putInt(KEY_RUNTIME_PROFILE_VERSION, RUNTIME_PROFILE_VERSION)
                 .apply()
-            logger.i("E4B", "Runtime profile migrated to conservative defaults ctx=$context")
+            logger.i("E4B", "Runtime profile migrated to Gemma4 safe defaults ctx=$context")
         }
         if (previousInferenceInterrupted) {
-            context = 2048L
+            context = 1024L
             prefs.edit()
                 .putLong("context", context)
                 .putBoolean(KEY_E4B_ACTIVE, false)
                 .commit()
         }
-        return context
+        return context.coerceIn(1024L, 2048L)
     }
 
     fun refresh() {
         _ui.value = _ui.value.copy(
-            messages = db.recentMessages(100),
+            messages = db.recentMessages(currentChatId, 100),
+            chats = db.listChats(100),
+            currentChatId = currentChatId,
             memoryCount = db.memoryCount(),
             e4bInstalled = models.isE4BInstalled(),
             e2bInstalled = models.isE2BInstalled()
@@ -128,6 +142,36 @@ class JinkakuViewModel(app: Application) : AndroidViewModel(app) {
         )
     }
 
+    fun newChat() {
+        if (_ui.value.busy || _ui.value.e4bImporting || _ui.value.e2bImporting) {
+            setError("処理中は新しいチャットを開始できません")
+            return
+        }
+        e4b.unload()
+        currentChatId = db.createChat()
+        prefs.edit().putLong(KEY_CURRENT_CHAT_ID, currentChatId).apply()
+        _ui.value = _ui.value.copy(generatingText = "", thinking = false, runtimeStatus = "IDLE")
+        refresh()
+        logger.i("CHAT", "New chat created id=$currentChatId")
+    }
+
+    fun selectChat(chatId: Long) {
+        if (_ui.value.busy || _ui.value.e4bImporting || _ui.value.e2bImporting) {
+            setError("処理中はチャットを切り替えられません")
+            return
+        }
+        if (!db.chatExists(chatId)) {
+            setError("チャット履歴が見つかりません")
+            return
+        }
+        e4b.unload()
+        currentChatId = chatId
+        prefs.edit().putLong(KEY_CURRENT_CHAT_ID, chatId).apply()
+        _ui.value = _ui.value.copy(generatingText = "", thinking = false, runtimeStatus = "IDLE")
+        refresh()
+        logger.i("CHAT", "Chat selected id=$chatId")
+    }
+
     fun send(text: String) {
         val clean = text.trim()
         if (clean.isEmpty() || _ui.value.busy) return
@@ -139,10 +183,14 @@ class JinkakuViewModel(app: Application) : AndroidViewModel(app) {
             setError("E4B GGUFモデルをダウンロード、またはローカルファイルから読み込んでください")
             return
         }
-        val userId = db.insertMessage(ROLE_USER, clean)
+
+        val chatId = currentChatId
+        val userId = db.insertMessage(chatId, ROLE_USER, clean)
+        db.maybeTitleChat(chatId, clean)
         db.queueMemory(userId)
         refresh()
         memoryIdleJob?.cancel()
+
         generationJob = viewModelScope.launch {
             runtimeMutex.withLock {
                 prefs.edit().putBoolean(KEY_E4B_ACTIVE, true).commit()
@@ -155,11 +203,16 @@ class JinkakuViewModel(app: Application) : AndroidViewModel(app) {
                         error = null
                     )
                     val relevant = withContext(Dispatchers.IO) { memory.retrieve(clean, 10) }
-                    val history = db.recentMessages(18).dropLast(1)
+                    val history = normalizeHistory(db.recentMessages(chatId, 18).dropLast(1))
                     val system = buildSystemPrompt(relevant.map { it.content })
-                    val prompt = buildPrompt(history, clean)
                     var finalText = ""
-                    e4b.generate(models.getE4BFile(), prompt, system, _ui.value.contextSize).collect { event ->
+                    e4b.generate(
+                        model = models.getE4BFile(),
+                        currentUserMessage = clean,
+                        systemPrompt = system,
+                        history = history,
+                        contextSize = _ui.value.contextSize
+                    ).collect { event ->
                         when (event) {
                             GenerationEvent.Thinking -> _ui.value = _ui.value.copy(thinking = true)
                             is GenerationEvent.Text -> {
@@ -173,7 +226,7 @@ class JinkakuViewModel(app: Application) : AndroidViewModel(app) {
                             is GenerationEvent.Completed -> finalText = event.finalText
                         }
                     }
-                    if (finalText.isNotBlank()) db.insertMessage(ROLE_ASSISTANT, finalText)
+                    if (finalText.isNotBlank()) db.insertMessage(chatId, ROLE_ASSISTANT, finalText)
                     _ui.value = _ui.value.copy(
                         busy = false,
                         thinking = false,
@@ -199,6 +252,22 @@ class JinkakuViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
         }
+    }
+
+    private fun normalizeHistory(input: List<ChatMessage>): List<ChatMessage> {
+        val out = mutableListOf<ChatMessage>()
+        input.forEach { message ->
+            if (message.role != ROLE_USER && message.role != ROLE_ASSISTANT) return@forEach
+            if (out.isEmpty()) {
+                if (message.role == ROLE_USER) out += message
+            } else if (out.last().role == message.role) {
+                out[out.lastIndex] = message
+            } else {
+                out += message
+            }
+        }
+        if (out.lastOrNull()?.role == ROLE_USER) out.removeAt(out.lastIndex)
+        return out.takeLast(12)
     }
 
     fun stopGeneration() {
@@ -324,17 +393,11 @@ class JinkakuViewModel(app: Application) : AndroidViewModel(app) {
     private fun buildSystemPrompt(memories: List<String>): String {
         val persona = db.currentPersona()
         val memoryBlock = if (memories.isEmpty()) "(none)" else memories.joinToString("\n") { "- $it" }
-        return """You are Jinkaku, a persistent local AI with an evolving but coherent personality. Think carefully before answering. Your hidden reasoning must never be quoted or exposed; output only the final answer to the user. Do not blindly agree. Be consistent with durable memories, while treating them as fallible context. Persona state: $persona
+        return """<|think|>
+You are Jinkaku, a persistent local AI with an evolving but coherent personality. Think carefully before answering, but keep internal reasoning private. Output only the final answer after thinking. Do not blindly agree. Be consistent with durable memories while treating them as fallible context. Reply naturally in the user's language.
+Persona state: $persona
 Relevant long-term memories:
-$memoryBlock
-Current response should be natural and directly answer the user's latest message.""".trimIndent()
-    }
-
-    private fun buildPrompt(history: List<ChatMessage>, current: String): String {
-        val transcript = history.joinToString("\n") {
-            if (it.role == ROLE_USER) "User: ${it.content}" else "Assistant: ${it.content}"
-        }
-        return if (transcript.isBlank()) current else "Recent conversation:\n$transcript\n\nLatest user message:\n$current"
+$memoryBlock""".trimIndent()
     }
 
     fun downloadE4B() {
@@ -367,8 +430,10 @@ Current response should be natural and directly answer the user's latest message
     }
 
     fun setContext(value: Long) {
-        prefs.edit().putLong("context", value).apply()
-        _ui.value = _ui.value.copy(contextSize = value)
+        val safe = value.coerceIn(1024L, 2048L)
+        prefs.edit().putLong("context", safe).apply()
+        e4b.unload()
+        _ui.value = _ui.value.copy(contextSize = safe)
     }
 
     fun clearMessagesNotice() {
@@ -417,7 +482,8 @@ Current response should be natural and directly answer the user's latest message
     companion object {
         private const val KEY_E4B_ACTIVE = "e4b_inference_active"
         private const val KEY_RUNTIME_PROFILE_VERSION = "runtime_profile_version"
-        private const val RUNTIME_PROFILE_VERSION = 2
+        private const val KEY_CURRENT_CHAT_ID = "current_chat_id"
+        private const val RUNTIME_PROFILE_VERSION = 3
 
         fun factory(app: Application): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
