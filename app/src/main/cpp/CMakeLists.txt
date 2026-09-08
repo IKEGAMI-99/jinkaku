@@ -23,10 +23,9 @@ set(GGML_CPU_ALL_VARIANTS OFF CACHE BOOL "" FORCE)
 set(GGML_CPU_KLEIDIAI OFF CACHE BOOL "" FORCE)
 set(GGML_LLAMAFILE OFF CACHE BOOL "" FORCE)
 
-# POCO F7 Ultra / Snapdragon 8 Elite: keep Vulkan disabled because the target
-# device previously hit VK_ERROR_DEVICE_LOST. OpenCL is the supported Adreno
-# path in upstream llama.cpp and supports Q4_K GGUF tensors.
-set(GGML_VULKAN OFF CACHE BOOL "" FORCE)
+# POCO F7 Ultra / Snapdragon 8 Elite: build both Adreno paths so OpenCL can
+# remain the stable default while Vulkan is available for explicit testing.
+set(GGML_VULKAN ON CACHE BOOL "" FORCE)
 set(GGML_OPENCL ON CACHE BOOL "" FORCE)
 set(GGML_OPENCL_EMBED_KERNELS ON CACHE BOOL "" FORCE)
 set(GGML_OPENCL_USE_ADRENO_KERNELS ON CACHE BOOL "" FORCE)
