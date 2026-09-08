@@ -2,6 +2,7 @@
 #include <android/log.h>
 #include <atomic>
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <mutex>
 #include <string>
@@ -26,8 +27,16 @@ llama_sampler * g_sampler = nullptr;
 common_chat_templates_ptr g_chat_templates;
 int32_t g_position = 0;
 int32_t g_generated = 0;
+int32_t g_prompt_tokens = 0;
 int32_t g_max_tokens = 0;
 int32_t g_context_size = 0;
+int64_t g_prefill_us = 0;
+int64_t g_decode_started_us = 0;
+
+int64_t now_us() {
+    return std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
 
 void append_utf8(std::string & out, uint32_t cp) {
     if (cp <= 0x7F) {
@@ -91,8 +100,11 @@ void free_model_locked() {
     g_vocab = nullptr;
     g_position = 0;
     g_generated = 0;
+    g_prompt_tokens = 0;
     g_max_tokens = 0;
     g_context_size = 0;
+    g_prefill_us = 0;
+    g_decode_started_us = 0;
 }
 
 bool add_batch_token(llama_batch & batch, llama_token token, llama_pos pos, bool logits) {
@@ -228,7 +240,7 @@ Java_com_ikegami99_jinkaku_ai_UpstreamLlamaBridge_nativeLoad(JNIEnv * env, jobje
         llama_sampler_chain_add(g_sampler, llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
 
         g_stop.store(false, std::memory_order_relaxed);
-        LOGI("model loaded with upstream llama.cpp ctx=%d threads=6 ubatch=128", ctx);
+        LOGI("model loaded with upstream llama.cpp ctx=%d threads=6 ubatch=128 backend=CPU", ctx);
         return nullptr;
     } catch (const std::exception & e) {
         free_model_locked();
@@ -260,7 +272,7 @@ Java_com_ikegami99_jinkaku_ai_UpstreamLlamaBridge_nativeBegin(
         common_chat_templates_inputs inputs;
         inputs.use_jinja = true;
         inputs.add_generation_prompt = true;
-        inputs.enable_thinking = false;
+        inputs.enable_thinking = true;
         inputs.messages.reserve(static_cast<size_t>(roleCount));
 
         for (jsize i = 0; i < roleCount; ++i) {
@@ -294,13 +306,20 @@ Java_com_ikegami99_jinkaku_ai_UpstreamLlamaBridge_nativeBegin(
         llama_sampler_reset(g_sampler);
         g_stop.store(false, std::memory_order_relaxed);
         g_generated = 0;
+        g_prompt_tokens = tokenized;
+        g_prefill_us = 0;
+        g_decode_started_us = 0;
         const int32_t available = std::max(16, g_context_size - tokenized - 4);
-        g_max_tokens = std::min(std::clamp(static_cast<int32_t>(maxTokens), 16, 768), available);
+        g_max_tokens = std::min(std::clamp(static_cast<int32_t>(maxTokens), 16, 1536), available);
 
+        const int64_t prefill_started = now_us();
         const std::string decodeError = decode_prompt(tokens);
+        g_prefill_us = std::max<int64_t>(1, now_us() - prefill_started);
         if (!decodeError.empty()) return error_string(env, decodeError);
+        g_decode_started_us = now_us();
 
-        LOGI("generation begun promptTokens=%d maxTokens=%d thinking=false", tokenized, g_max_tokens);
+        const double prefill_tps = tokenized * 1000000.0 / static_cast<double>(g_prefill_us);
+        LOGI("generation begun promptTokens=%d maxTokens=%d thinking=true prefill=%.2f tok/s", tokenized, g_max_tokens, prefill_tps);
         return nullptr;
     } catch (const std::exception & e) {
         return error_string(env, std::string("native begin exception: ") + e.what());
@@ -352,6 +371,27 @@ Java_com_ikegami99_jinkaku_ai_UpstreamLlamaBridge_nativeNext(JNIEnv * env, jobje
         g_stop.store(true, std::memory_order_relaxed);
         return nullptr;
     }
+}
+
+extern "C" JNIEXPORT jlongArray JNICALL
+Java_com_ikegami99_jinkaku_ai_UpstreamLlamaBridge_nativeStats(JNIEnv * env, jobject) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    const int64_t decode_us = g_decode_started_us > 0
+        ? std::max<int64_t>(0, now_us() - g_decode_started_us)
+        : 0;
+    const jlong values[7] = {
+        static_cast<jlong>(g_prompt_tokens),
+        static_cast<jlong>(g_generated),
+        static_cast<jlong>(g_context_size),
+        static_cast<jlong>(g_position),
+        static_cast<jlong>(g_prefill_us),
+        static_cast<jlong>(decode_us),
+        static_cast<jlong>(g_max_tokens)
+    };
+    jlongArray result = env->NewLongArray(7);
+    if (!result) return nullptr;
+    env->SetLongArrayRegion(result, 0, 7, values);
+    return result;
 }
 
 extern "C" JNIEXPORT void JNICALL
