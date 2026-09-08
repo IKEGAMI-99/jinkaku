@@ -16,6 +16,7 @@ class ModelManager(private val context: Context, private val logger: AppLogger) 
     private val root = File(context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: context.filesDir, "models").apply { mkdirs() }
     val e4bFile = File(root, E4B_FILE)
     val e2bFile = File(root, E2B_FILE)
+    val embeddingFile = File(root, EMBEDDING_FILE)
 
     init {
         val legacy = File(root, LEGACY_E4B_FILE)
@@ -26,7 +27,11 @@ class ModelManager(private val context: Context, private val logger: AppLogger) 
                 logger.w("MODEL", "Could not migrate legacy E4B filename; using legacy file in place")
             }
         }
-        listOf(File(root, "$E4B_FILE.importing"), File(root, "$E2B_FILE.importing")).forEach { stale ->
+        listOf(
+            File(root, "$E4B_FILE.importing"),
+            File(root, "$E2B_FILE.importing"),
+            File(root, "$EMBEDDING_FILE.importing")
+        ).forEach { stale ->
             if (stale.exists() && stale.delete()) logger.w("MODEL", "Removed stale import file ${stale.name}")
         }
     }
@@ -37,16 +42,14 @@ class ModelManager(private val context: Context, private val logger: AppLogger) 
         return if (legacy.exists()) legacy else e4bFile
     }
 
-    fun isE4BInstalled() = activeE4BFile().let { file ->
-        file.exists() && file.length() > 4L && runCatching {
-            FileInputStream(file).use { String(it.readNBytes(4), Charsets.US_ASCII) == "GGUF" }
-        }.getOrDefault(false)
-    }
-
+    fun isE4BInstalled() = activeE4BFile().let { file -> isValidGguf(file, 100L * 1024L * 1024L) }
     fun getE4BFile(): File = activeE4BFile()
     fun isE2BInstalled() = e2bFile.exists() && e2bFile.length() > 1_000_000_000L
+    fun isEmbeddingInstalled() = isValidGguf(embeddingFile, 150L * 1024L * 1024L)
+
     fun downloadE4B(): Long = enqueue(E4B_URL, E4B_FILE, "e4b")
     fun downloadE2B(): Long = enqueue(E2B_URL, E2B_FILE, "e2b")
+    fun downloadEmbedding(): Long = enqueue(EMBEDDING_URL, EMBEDDING_FILE, "embedding")
 
     private fun enqueue(url: String, filename: String, key: String): Long {
         cancelActiveDownload(key)
@@ -75,6 +78,11 @@ class ModelManager(private val context: Context, private val logger: AppLogger) 
     fun importE2B(uri: Uri, onProgress: (Float?) -> Unit = {}): ImportResult {
         cancelActiveDownload("e2b")
         return importFromUri(uri, e2bFile, ModelType.E2B_LITERT, onProgress)
+    }
+
+    fun importEmbedding(uri: Uri, onProgress: (Float?) -> Unit = {}): ImportResult {
+        cancelActiveDownload("embedding")
+        return importFromUri(uri, embeddingFile, ModelType.EMBEDDING_GGUF, onProgress)
     }
 
     private fun cancelActiveDownload(key: String) {
@@ -149,14 +157,22 @@ class ModelManager(private val context: Context, private val logger: AppLogger) 
         if (!file.exists() || file.length() <= 0L) throw IllegalArgumentException("選択したファイルが空です")
         when (type) {
             ModelType.E4B_GGUF -> {
-                if (file.length() < 100L * 1024L * 1024L) throw IllegalArgumentException("GGUFとして小さすぎるファイルです")
-                val magic = FileInputStream(file).use { String(it.readNBytes(4), Charsets.US_ASCII) }
-                if (magic != "GGUF") throw IllegalArgumentException("GGUFファイルではありません (header=$magic)")
+                if (!isValidGguf(file, 100L * 1024L * 1024L)) throw IllegalArgumentException("E4B用GGUFとして認識できません")
             }
             ModelType.E2B_LITERT -> {
                 if (file.length() < 1_000_000_000L) throw IllegalArgumentException("Gemma 4 E2B LiteRT-LMとして小さすぎるファイルです")
             }
+            ModelType.EMBEDDING_GGUF -> {
+                if (!isValidGguf(file, 150L * 1024L * 1024L)) throw IllegalArgumentException("EmbeddingGemma用GGUFとして認識できません")
+            }
         }
+    }
+
+    private fun isValidGguf(file: File, minBytes: Long): Boolean {
+        if (!file.exists() || file.length() < minBytes) return false
+        return runCatching {
+            FileInputStream(file).use { String(it.readNBytes(4), Charsets.US_ASCII) == "GGUF" }
+        }.getOrDefault(false)
     }
 
     private fun queryDisplayName(uri: Uri): String? = runCatching {
@@ -196,12 +212,26 @@ class ModelManager(private val context: Context, private val logger: AppLogger) 
         File(root, e4bFile.name + ".importing").delete()
         logger.i("MODEL", "E4B deleted")
     }
-    fun deleteE2B() { e2bFile.delete(); File(root, e2bFile.name + ".importing").delete(); logger.i("MODEL", "E2B deleted") }
 
-    fun verifyE2BSha256(): Boolean {
-        if (!isE2BInstalled()) return false
+    fun deleteE2B() {
+        e2bFile.delete()
+        File(root, e2bFile.name + ".importing").delete()
+        logger.i("MODEL", "E2B deleted")
+    }
+
+    fun deleteEmbedding() {
+        embeddingFile.delete()
+        File(root, embeddingFile.name + ".importing").delete()
+        logger.i("MODEL", "EmbeddingGemma deleted")
+    }
+
+    fun verifyE2BSha256(): Boolean = verifySha256(e2bFile, E2B_SHA256, "E2B")
+    fun verifyEmbeddingSha256(): Boolean = verifySha256(embeddingFile, EMBEDDING_SHA256, "EmbeddingGemma")
+
+    private fun verifySha256(file: File, expected: String, label: String): Boolean {
+        if (!file.exists()) return false
         val md = MessageDigest.getInstance("SHA-256")
-        FileInputStream(e2bFile).use { input ->
+        FileInputStream(file).use { input ->
             val buf = ByteArray(1024 * 1024)
             while (true) {
                 val n = input.read(buf)
@@ -210,8 +240,8 @@ class ModelManager(private val context: Context, private val logger: AppLogger) 
             }
         }
         val hex = md.digest().joinToString("") { "%02x".format(it) }
-        logger.i("MODEL", "E2B sha256=$hex")
-        return hex.equals(E2B_SHA256, true)
+        logger.i("MODEL", "$label sha256=$hex")
+        return hex.equals(expected, true)
     }
 
     private fun formatBytes(bytes: Long): String = when {
@@ -227,13 +257,16 @@ class ModelManager(private val context: Context, private val logger: AppLogger) 
         const val E4B_FILE = "Gemma-4-E4B-HauhauCS.gguf"
         const val LEGACY_E4B_FILE = "Gemma-4-E4B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf"
         const val E2B_FILE = "gemma-4-E2B-it.litertlm"
+        const val EMBEDDING_FILE = "embeddinggemma-300M-qat-Q4_0.gguf"
         const val E4B_URL = "https://huggingface.co/HauhauCS/Gemma-4-E4B-Uncensored-HauhauCS-Aggressive/resolve/main/Gemma-4-E4B-Uncensored-HauhauCS-Aggressive-Q2_K_P.gguf?download=true"
         const val E2B_URL = "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm?download=true"
+        const val EMBEDDING_URL = "https://huggingface.co/ggml-org/embeddinggemma-300M-qat-q4_0-GGUF/resolve/main/embeddinggemma-300M-qat-Q4_0.gguf?download=true"
         const val E2B_SHA256 = "181938105e0eefd105961417e8da75903eacda102c4fce9ce90f50b97139a63c"
+        const val EMBEDDING_SHA256 = "50d28e22432a148f6f8a86eab3700f92add5d1f54baf7790675a2a4dadbccf26"
     }
 }
 
-private enum class ModelType { E4B_GGUF, E2B_LITERT }
+private enum class ModelType { E4B_GGUF, E2B_LITERT, EMBEDDING_GGUF }
 data class ImportResult(val sourceName: String, val bytes: Long)
 data class DownloadStatus(val status: Int, val downloaded: Long, val total: Long, val reason: Int) {
     val progress: Float get() = if (total > 0) (downloaded.toDouble() / total).toFloat().coerceIn(0f, 1f) else 0f
