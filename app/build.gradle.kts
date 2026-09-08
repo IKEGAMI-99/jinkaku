@@ -54,7 +54,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.10.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.10.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
-    implementation("io.github.aatricks:llmedge:0.3.9")
+    implementation("io.github.aatricks:llmedge:0.4.7.2")
     implementation("com.google.ai.edge.litertlm:litertlm-android:0.16.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
