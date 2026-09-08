@@ -24,7 +24,7 @@ jobs:
       - name: Install Vulkan shader tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y glslc spirv-headers libvulkan-dev
+          sudo apt-get install -y glslc libvulkan-dev
       - name: Install Android SDK, NDK and CMake
         run: |
           yes | sdkmanager \
@@ -32,6 +32,21 @@ jobs:
             "build-tools;35.0.0" \
             "ndk;29.0.13113456" \
             "cmake;3.31.6" || true
+      - name: Prepare Android SPIR-V headers package
+        shell: bash
+        run: |
+          set -euxo pipefail
+          NDK="$ANDROID_HOME/ndk/29.0.13113456"
+          SYSROOT="$NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+          rm -rf /tmp/SPIRV-Headers /tmp/spirv-headers-build
+          git clone --depth 1 https://github.com/KhronosGroup/SPIRV-Headers.git /tmp/SPIRV-Headers
+          cmake -S /tmp/SPIRV-Headers -B /tmp/spirv-headers-build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$SYSROOT/usr" \
+            -DSPIRV_HEADERS_ENABLE_TESTS=OFF \
+            -DSPIRV_HEADERS_ENABLE_INSTALL=ON
+          cmake --install /tmp/spirv-headers-build
+          test -f "$SYSROOT/usr/share/cmake/SPIRV-Headers/SPIRV-HeadersConfig.cmake"
       - name: Prepare Android OpenCL headers and ICD loader
         shell: bash
         run: |
