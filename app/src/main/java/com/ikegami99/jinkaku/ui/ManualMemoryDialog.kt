@@ -32,15 +32,19 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+private data class ManualMemoryType(val key: String, val label: String)
+
 private val manualMemoryTypes = listOf(
-    "PERSONA",
-    "USER",
-    "EPISODIC",
-    "PREFERENCE",
-    "PROJECT",
-    "SELF",
-    "RELATIONSHIP"
+    ManualMemoryType("PERSONA", "PERSONA（人格）"),
+    ManualMemoryType("USER", "USER（ユーザー情報）"),
+    ManualMemoryType("EPISODIC", "EPISODIC（出来事・思い出）"),
+    ManualMemoryType("PREFERENCE", "PREFERENCE（好み・傾向）"),
+    ManualMemoryType("PROJECT", "PROJECT（プロジェクト）"),
+    ManualMemoryType("SELF", "SELF（AI自身の記憶）"),
+    ManualMemoryType("RELATIONSHIP", "RELATIONSHIP（関係性）")
 )
+
+private fun typeLabel(key: String): String = manualMemoryTypes.firstOrNull { it.key == key }?.label ?: key
 
 @Composable
 fun ManualMemoryDialog(
@@ -76,13 +80,13 @@ fun ManualMemoryDialog(
                     enabled = !saving
                 )
                 Row {
-                    OutlinedButton(onClick = { typeMenu = true }, enabled = !saving) { Text(type) }
+                    OutlinedButton(onClick = { typeMenu = true }, enabled = !saving) { Text(typeLabel(type)) }
                     DropdownMenu(expanded = typeMenu, onDismissRequest = { typeMenu = false }) {
                         manualMemoryTypes.forEach { candidate ->
                             DropdownMenuItem(
-                                text = { Text(candidate) },
+                                text = { Text(candidate.label) },
                                 onClick = {
-                                    type = candidate
+                                    type = candidate.key
                                     typeMenu = false
                                 }
                             )
