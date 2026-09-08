@@ -186,8 +186,6 @@ Java_com_ikegami99_jinkaku_ai_UpstreamLlamaBridge_nativeLoad(JNIEnv * env, jobje
 
         llama_model_params mparams = llama_model_default_params();
         mparams.n_gpu_layers = 0;
-        mparams.use_mmap = true;
-        mparams.use_mlock = false;
 
         g_model = llama_model_load_from_file(path.c_str(), mparams);
         if (!g_model) return error_string(env, "llama_model_load_from_file returned null");
