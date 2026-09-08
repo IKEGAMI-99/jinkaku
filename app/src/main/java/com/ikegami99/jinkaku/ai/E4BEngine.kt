@@ -3,11 +3,9 @@ package com.ikegami99.jinkaku.ai
 import android.app.ActivityManager
 import android.content.Context
 import com.ikegami99.jinkaku.logging.AppLogger
-import io.aatricks.llmedge.LLMEdge
-import io.aatricks.llmedge.model.ModelSpec
-import io.aatricks.llmedge.text.TextModelOptions
-import io.aatricks.llmedge.text.TextStreamEvent
+import io.aatricks.llmedge.text.runtime.SmolLM
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import java.io.File
@@ -20,12 +18,56 @@ sealed interface GenerationEvent {
 
 class E4BEngine(
     private val context: Context,
-    private val scope: CoroutineScope,
+    @Suppress("unused") private val scope: CoroutineScope,
     private val logger: AppLogger
 ) : AutoCloseable {
-    private var edge: LLMEdge? = null
+    private var runtime: SmolLM? = null
+    private var loadedPath: String? = null
+    private var loadedContext: Long = -1L
 
-    private fun runtime(): LLMEdge = edge ?: LLMEdge.create(context, scope).also { edge = it }
+    private suspend fun ensureLoaded(model: File, contextSize: Long): SmolLM {
+        val existing = runtime
+        if (existing != null && loadedPath == model.absolutePath && loadedContext == contextSize) {
+            return existing
+        }
+
+        unload()
+        logger.i("E4B", "Creating direct SmolLM CPU runtime; Vulkan is hard-disabled")
+        val smol = SmolLM(useVulkan = false)
+        try {
+            smol.load(
+                model.absolutePath,
+                SmolLM.InferenceParams(
+                    temperature = 1.0f,
+                    storeChats = false,
+                    contextSize = contextSize,
+                    numThreads = 4,
+                    generationThreads = 2,
+                    useMmap = true,
+                    useMlock = false,
+                    useFlashAttn = false,
+                    thinkingMode = SmolLM.ThinkingMode.DEFAULT,
+                    reasoningBudget = -1,
+                    kvCacheTypeK = SmolLM.KvCacheType.Q8_KV,
+                    kvCacheTypeV = SmolLM.KvCacheType.Q8_0,
+                    nGpuLayers = 0,
+                    nUbatch = 64
+                )
+            )
+            logger.i(
+                "E4B",
+                "CPU model loaded vulkanEnabled=${smol.isVulkanEnabled()} estimatedNative=${smol.getEstimatedNativeMemoryBytes()} estimatedState=${smol.getEstimatedStateMemoryBytes()}"
+            )
+            runtime = smol
+            loadedPath = model.absolutePath
+            loadedContext = contextSize
+            return smol
+        } catch (t: Throwable) {
+            runCatching { smol.close() }
+            logger.e("E4B", "Direct CPU model load failed", t)
+            throw t
+        }
+    }
 
     fun generate(
         model: File,
@@ -35,76 +77,67 @@ class E4BEngine(
     ): Flow<GenerationEvent> = flow {
         require(model.exists() && model.length() > 0L) { "E4B GGUF model is not installed" }
 
-        val safeContext = contextSize.coerceIn(2048L, 8192L)
+        val safeContext = contextSize.coerceIn(2048L, 4096L)
         val memoryInfo = ActivityManager.MemoryInfo()
         (context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager).getMemoryInfo(memoryInfo)
         logger.i(
             "E4B",
-            "Generation start model=${model.name} size=${model.length()} ctx=$safeContext availMem=${memoryInfo.availMem} lowMemory=${memoryInfo.lowMemory}"
+            "Generation start CPU_ONLY model=${model.name} size=${model.length()} ctx=$safeContext availMem=${memoryInfo.availMem} lowMemory=${memoryInfo.lowMemory}"
         )
 
-        if (memoryInfo.lowMemory) {
-            throw IllegalStateException("端末の空きRAMが不足しています。バックグラウンドアプリを閉じて再試行してください")
+        if (memoryInfo.lowMemory || memoryInfo.availMem < 3_500_000_000L) {
+            throw IllegalStateException("E4B用の空きRAMが不足しています。バックグラウンドアプリを閉じて再試行してください")
         }
+
+        val smol = ensureLoaded(model, safeContext)
+        smol.clearMessages()
+        smol.clearKvCache()
+        smol.addSystemPrompt(systemPrompt)
 
         val started = System.currentTimeMillis()
         val filter = ThinkingFilter()
         var final = ""
         var thinkingSent = false
 
-        val options = TextModelOptions(
-            contextSize = safeContext,
-            temperature = 1.0f,
-            numThreads = 6,
-            generationThreads = 3,
-            useMmap = true,
-            useMlock = false,
-            useFlashAttention = false,
-            useVulkan = false,
-            nUbatch = 128
-        )
+        emit(GenerationEvent.Thinking)
+        thinkingSent = true
 
-        runtime().text.stream(
-            prompt = prompt,
-            model = ModelSpec.localFile(model),
-            systemPrompt = systemPrompt,
-            options = options,
-            batchSize = 2
-        ).collect { event ->
-            when (event) {
-                is TextStreamEvent.Started -> {
+        smol.getResponseAsFlow(prompt, Dispatchers.Default, 1).collect { chunk ->
+            if (chunk == "[EOG]") return@collect
+            val visible = filter.accept(chunk)
+            if (visible.isNotEmpty()) {
+                if (!thinkingSent) {
                     emit(GenerationEvent.Thinking)
                     thinkingSent = true
                 }
-                is TextStreamEvent.Chunk -> {
-                    val visible = filter.accept(event.value)
-                    if (visible.isNotEmpty()) {
-                        if (!thinkingSent) {
-                            emit(GenerationEvent.Thinking)
-                            thinkingSent = true
-                        }
-                        final += visible
-                        emit(GenerationEvent.Text(visible))
-                    }
-                }
-                is TextStreamEvent.Completed -> {
-                    val tail = filter.finish()
-                    if (tail.isNotEmpty()) {
-                        final += tail
-                        emit(GenerationEvent.Text(tail))
-                    }
-                }
+                final += visible
+                emit(GenerationEvent.Text(visible))
             }
         }
 
+        val tail = filter.finish()
+        if (tail.isNotEmpty()) {
+            final += tail
+            emit(GenerationEvent.Text(tail))
+        }
+
         val elapsed = System.currentTimeMillis() - started
-        logger.i("E4B", "Generation complete elapsedMs=$elapsed chars=${final.length}")
+        val metrics = runCatching { smol.getLastGenerationMetrics() }.getOrNull()
+        logger.i(
+            "E4B",
+            "Generation complete elapsedMs=$elapsed chars=${final.length} tokens=${metrics?.tokenCount ?: -1} tokS=${metrics?.tokensPerSecond ?: -1f}"
+        )
         emit(GenerationEvent.Completed(final.trim(), elapsed))
     }
 
     fun unload() {
-        runCatching { edge?.close() }.onFailure { logger.e("E4B", "Runtime close failed", it) }
-        edge = null
+        val old = runtime
+        runtime = null
+        loadedPath = null
+        loadedContext = -1L
+        if (old != null) {
+            runCatching { old.close() }.onFailure { logger.e("E4B", "CPU runtime close failed", it) }
+        }
         logger.i("E4B", "Runtime unloaded")
     }
 
