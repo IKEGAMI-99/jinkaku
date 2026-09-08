@@ -20,11 +20,12 @@ set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
 set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
 set(GGML_BACKEND_DL OFF CACHE BOOL "" FORCE)
 set(GGML_CPU_ALL_VARIANTS OFF CACHE BOOL "" FORCE)
-set(GGML_CPU_KLEIDIAI OFF CACHE BOOL "" FORCE)
+# Arm64 Android gets KleidiAI's optimized quantized-matmul kernels. This keeps
+# inference CPU-only while using the Snapdragon's Arm SIMD more effectively.
+set(GGML_CPU_KLEIDIAI ON CACHE BOOL "" FORCE)
 set(GGML_LLAMAFILE OFF CACHE BOOL "" FORCE)
 
-# CPU-only runtime. GPU backends are deliberately disabled for stability on
-# the target Android device and to avoid shipping unused OpenCL/Vulkan code.
+# CPU-only runtime. GPU backends stay disabled for stability.
 set(GGML_VULKAN OFF CACHE BOOL "" FORCE)
 set(GGML_OPENCL OFF CACHE BOOL "" FORCE)
 
