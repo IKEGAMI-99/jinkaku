@@ -6,11 +6,14 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -36,6 +39,13 @@ fun JinkakuApp(vm: JinkakuViewModel) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
+    val focusManager = LocalFocusManager.current
+    val keyboard = LocalSoftwareKeyboardController.current
+
+    fun dismissIme() {
+        focusManager.clearFocus(force = true)
+        keyboard?.hide()
+    }
 
     LaunchedEffect(ui.error, ui.notice) {
         val text = ui.error ?: ui.notice
@@ -60,6 +70,7 @@ fun JinkakuApp(vm: JinkakuViewModel) {
                         NavigationDrawerItem(
                             selected = screen == MainScreen.MEMORY,
                             onClick = {
+                                dismissIme()
                                 screen = MainScreen.MEMORY
                                 vm.refresh()
                                 scope.launch { drawerState.close() }
@@ -83,13 +94,12 @@ fun JinkakuApp(vm: JinkakuViewModel) {
                                 NavigationDrawerItem(
                                     selected = screen == MainScreen.CHAT && chat.id == ui.currentChatId,
                                     onClick = {
+                                        dismissIme()
                                         screen = MainScreen.CHAT
                                         vm.selectChat(chat.id)
                                         scope.launch { drawerState.close() }
                                     },
-                                    label = {
-                                        Text(chat.title, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                    }
+                                    label = { Text(chat.title, maxLines = 2, overflow = TextOverflow.Ellipsis) }
                                 )
                             }
                         }
@@ -106,24 +116,35 @@ fun JinkakuApp(vm: JinkakuViewModel) {
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             TextButton(
-                                onClick = { scope.launch { drawerState.open() } },
+                                onClick = {
+                                    dismissIme()
+                                    scope.launch { drawerState.open() }
+                                },
                                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
-                            ) {
-                                Text("☰", style = MaterialTheme.typography.titleLarge)
-                            }
+                            ) { Text("☰", style = MaterialTheme.typography.titleLarge) }
                             Column(Modifier.weight(1f)) {
                                 Text("Jinkaku", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                                 Text("${ui.runtimeStatus}  •  Memory ${ui.memoryCount}", style = MaterialTheme.typography.labelMedium)
                             }
                             if (screen == MainScreen.CHAT) {
                                 TextButton(onClick = {
+                                    dismissIme()
                                     vm.newChat()
                                 }) { Text("New chat") }
-                                TextButton(onClick = { screen = MainScreen.SETTINGS }) { Text("設定") }
+                                TextButton(onClick = {
+                                    dismissIme()
+                                    screen = MainScreen.SETTINGS
+                                }) { Text("設定") }
                             } else {
-                                TextButton(onClick = { screen = MainScreen.CHAT }) { Text("チャット") }
+                                TextButton(onClick = {
+                                    dismissIme()
+                                    screen = MainScreen.CHAT
+                                }) { Text("チャット") }
                                 if (screen != MainScreen.SETTINGS) {
-                                    TextButton(onClick = { screen = MainScreen.SETTINGS }) { Text("設定") }
+                                    TextButton(onClick = {
+                                        dismissIme()
+                                        screen = MainScreen.SETTINGS
+                                    }) { Text("設定") }
                                 }
                             }
                         }
@@ -157,14 +178,30 @@ private fun ChatScreen(vm: JinkakuViewModel, modifier: Modifier = Modifier) {
     val ui by vm.ui.collectAsStateWithLifecycle()
     val telemetry by InferenceTelemetry.state.collectAsStateWithLifecycle()
     var input by remember { mutableStateOf("") }
+    val focusManager = LocalFocusManager.current
+    val keyboard = LocalSoftwareKeyboardController.current
+    val listState = rememberLazyListState()
 
-    // Do not add imePadding here. The activity uses adjustResize, so adding the
-    // full IME inset again pushes the composer upward by roughly one keyboard height.
+    LaunchedEffect(ui.messages.size, ui.generatingText.length, ui.thinking) {
+        val total = ui.messages.size + if (ui.busy && (ui.thinking || ui.generatingText.isNotBlank())) 1 else 0
+        if (total > 0) listState.animateScrollToItem(total - 1)
+    }
+
+    fun submit() {
+        val text = input.trim()
+        if (text.isBlank()) return
+        input = ""
+        focusManager.clearFocus(force = true)
+        keyboard?.hide()
+        vm.send(text)
+    }
+
     Column(modifier.fillMaxSize()) {
         ContextMeter(telemetry = telemetry, configuredContext = ui.contextSize.toInt())
 
         LazyColumn(
-            Modifier.weight(1f).fillMaxWidth(),
+            state = listState,
+            modifier = Modifier.weight(1f).fillMaxWidth(),
             contentPadding = PaddingValues(12.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
@@ -193,16 +230,13 @@ private fun ChatScreen(vm: JinkakuViewModel, modifier: Modifier = Modifier) {
 
             if (ui.busy && (ui.thinking || ui.generatingText.isNotBlank())) {
                 item {
-                    Column(Modifier.fillMaxWidth()) {
-                        Surface(shape = RoundedCornerShape(18.dp), tonalElevation = 1.dp) {
-                            Column(Modifier.padding(14.dp)) {
-                                if (ui.thinking && ui.generatingText.isBlank()) {
-                                    Text("Thinking…", style = MaterialTheme.typography.labelMedium)
-                                }
-                                if (ui.generatingText.isNotBlank()) Text(ui.generatingText)
+                    Surface(shape = RoundedCornerShape(18.dp), tonalElevation = 1.dp) {
+                        Column(Modifier.padding(14.dp)) {
+                            if (ui.thinking && ui.generatingText.isBlank()) {
+                                Text("入力中…", style = MaterialTheme.typography.labelMedium)
                             }
+                            if (ui.generatingText.isNotBlank()) Text(ui.generatingText)
                         }
-                        InferenceStatsLine(telemetry, Modifier.padding(start = 8.dp, top = 4.dp))
                     }
                 }
             }
@@ -210,7 +244,7 @@ private fun ChatScreen(vm: JinkakuViewModel, modifier: Modifier = Modifier) {
 
         HorizontalDivider()
         Row(
-            Modifier.fillMaxWidth().navigationBarsPadding().padding(10.dp),
+            Modifier.fillMaxWidth().imePadding().navigationBarsPadding().padding(10.dp),
             verticalAlignment = Alignment.Bottom
         ) {
             OutlinedTextField(
@@ -222,14 +256,14 @@ private fun ChatScreen(vm: JinkakuViewModel, modifier: Modifier = Modifier) {
             )
             Spacer(Modifier.width(8.dp))
             if (ui.busy) {
-                Button(onClick = vm::stopGeneration) { Text("停止") }
+                Button(onClick = {
+                    focusManager.clearFocus(force = true)
+                    keyboard?.hide()
+                    vm.stopGeneration()
+                }) { Text("停止") }
             } else {
                 Button(
-                    onClick = {
-                        val t = input
-                        input = ""
-                        vm.send(t)
-                    },
+                    onClick = ::submit,
                     enabled = input.isNotBlank() &&
                         !ui.e4bImporting && !ui.e2bImporting &&
                         !ui.embeddingImporting && !ui.embeddingReindexing
@@ -263,17 +297,8 @@ private fun ContextMeter(telemetry: InferenceTelemetryState, configuredContext: 
 
 @Composable
 private fun InferenceStatsLine(telemetry: InferenceTelemetryState, modifier: Modifier = Modifier) {
-    val phase = when (telemetry.phase) {
-        "LOADING" -> "LOADING"
-        "PREFILL" -> "PREFILL"
-        "THINKING" -> "THINKING"
-        "DECODE" -> "DECODE"
-        "DONE" -> "DONE"
-        "STOPPED" -> "STOPPED"
-        else -> telemetry.phase
-    }
     Text(
-        "$phase  •  Prefill ${telemetry.prefillLabel()} tok/s  •  Decode ${telemetry.decodeLabel()} tok/s  •  Gen ${telemetry.generatedTokens} tok  •  ${telemetry.backend}",
+        "Prefill ${telemetry.prefillLabel()} tok/s  •  Decode ${telemetry.decodeLabel()} tok/s  •  ${telemetry.generatedTokens} tok  •  ${telemetry.backend}",
         modifier = modifier,
         style = MaterialTheme.typography.labelSmall
     )
@@ -282,9 +307,26 @@ private fun InferenceStatsLine(telemetry: InferenceTelemetryState, modifier: Mod
 @Composable
 private fun MemoryScreen(vm: JinkakuViewModel, modifier: Modifier = Modifier) {
     val ui by vm.ui.collectAsStateWithLifecycle()
+    var confirmClear by remember { mutableStateOf(false) }
+
+    if (confirmClear) {
+        AlertDialog(
+            onDismissRequest = { confirmClear = false },
+            title = { Text("Memoryを全削除") },
+            text = { Text("長期Memoryと未処理のMemory候補をすべて削除します。チャット履歴とPersonaは残ります。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmClear = false
+                    vm.clearMemories()
+                }) { Text("削除") }
+            },
+            dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("キャンセル") } }
+        )
+    }
+
     Column(modifier.fillMaxSize()) {
         Surface(tonalElevation = 1.dp) {
-            Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text("Long-term Memory", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
@@ -292,6 +334,10 @@ private fun MemoryScreen(vm: JinkakuViewModel, modifier: Modifier = Modifier) {
                     }
                     OutlinedButton(onClick = vm::refresh) { Text("更新") }
                 }
+                OutlinedButton(
+                    onClick = { confirmClear = true },
+                    enabled = ui.memoryCount > 0 && !ui.busy && !ui.embeddingReindexing
+                ) { Text("Memoryを全削除") }
                 if (ui.embeddingReindexing) {
                     LinearProgressIndicator(
                         progress = { (ui.embeddingReindexProgress ?: 0f).coerceIn(0f, 1f) },
@@ -302,9 +348,7 @@ private fun MemoryScreen(vm: JinkakuViewModel, modifier: Modifier = Modifier) {
             }
         }
         if (ui.memories.isEmpty()) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("まだ長期Memoryはありません")
-            }
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("まだ長期Memoryはありません") }
         } else {
             LazyColumn(
                 Modifier.fillMaxSize(),
@@ -353,12 +397,38 @@ private fun SettingsScreen(
     val e4bPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) vm.importE4B(uri) }
     val e2bPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) vm.importE2B(uri) }
     val embeddingPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) vm.importEmbedding(uri) }
+    var personaDraft by remember { mutableStateOf(vm.currentPersona()) }
 
     LazyColumn(
         modifier.fillMaxSize(),
         contentPadding = PaddingValues(18.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
+        item { Text("Persona", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold) }
+        item {
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Jinkakuの基本人格", fontWeight = FontWeight.SemiBold)
+                    OutlinedTextField(
+                        value = personaDraft,
+                        onValueChange = { personaDraft = it },
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 150.dp),
+                        label = { Text("Persona") },
+                        minLines = 5,
+                        maxLines = 12
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = { vm.savePersona(personaDraft) },
+                            enabled = personaDraft.isNotBlank() && !ui.busy
+                        ) { Text("Personaを保存") }
+                        OutlinedButton(onClick = { personaDraft = vm.currentPersona() }) { Text("再読込") }
+                    }
+                    Text("保存するたびにRevisionとして履歴へ残ります。次の会話からSystem Promptへ反映されます。", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
+
         item { Text("モデル", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold) }
         item {
             ModelCard(
@@ -405,7 +475,7 @@ private fun SettingsScreen(
         item {
             Text("Context", fontWeight = FontWeight.Bold)
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                listOf(1024L, 2048L).forEach { size ->
+                listOf(1024L, 2048L, 4096L, 8192L).forEach { size ->
                     FilterChip(
                         selected = ui.contextSize == size,
                         onClick = { vm.setContext(size) },
@@ -413,12 +483,12 @@ private fun SettingsScreen(
                     )
                 }
             }
-            Text("現在はCPU安定性優先で1K/2Kに制限しています。チャット画面上部に使用量と残量を表示します。", style = MaterialTheme.typography.bodySmall)
+            Text("1K/2K/4K/8Kから選択できます。8KはPOCO F7 UltraでもRAM・Prefill負荷が増えるため、失敗時は自動的に4K→2K→1Kへフォールバックします。", style = MaterialTheme.typography.bodySmall)
         }
         item {
             Text("推論表示", fontWeight = FontWeight.Bold)
             Text(
-                "CoTは有効です。思考本文は非表示ですが、Prefill/Decode速度、生成token数、Backend、Context残量をリアルタイム表示します。現在のE4B backendはCPUです。",
+                "CoTは有効で本文は非表示です。生成中は「入力中…」と表示し、Prefill/Decode速度・token数・Backendは回答完了後だけ吹き出し下へ表示します。",
                 style = MaterialTheme.typography.bodySmall
             )
         }
@@ -441,7 +511,7 @@ private fun SettingsScreen(
                     modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
                 )
             }
-            Text("既存の256d Memoryは再索引するとEmbeddingGemmaの768dへ置き換わります。Memory本文は削除されません。", style = MaterialTheme.typography.bodySmall)
+            Text("Memoryの中身と全削除は左上メニュー → Memoryから操作できます。", style = MaterialTheme.typography.bodySmall)
         }
         item {
             Text("メンテナンス", fontWeight = FontWeight.Bold)
