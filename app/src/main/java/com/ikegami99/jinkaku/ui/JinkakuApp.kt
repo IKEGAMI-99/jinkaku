@@ -31,9 +31,13 @@ import java.util.Locale
 
 private enum class MainScreen { CHAT, SETTINGS, MEMORY }
 
+private fun typingLabel(generatedTokens: Int): String =
+    "入力中" + ".".repeat((generatedTokens.mod(3)) + 1)
+
 @Composable
 fun JinkakuApp(vm: JinkakuViewModel) {
     val ui by vm.ui.collectAsStateWithLifecycle()
+    val telemetry by InferenceTelemetry.state.collectAsStateWithLifecycle()
     var screen by remember { mutableStateOf(MainScreen.CHAT) }
     val snackbar = remember { SnackbarHostState() }
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -46,6 +50,10 @@ fun JinkakuApp(vm: JinkakuViewModel) {
         focusManager.clearFocus(force = true)
         keyboard?.hide()
     }
+
+    val statusText = if (ui.runtimeStatus == "入力中") {
+        typingLabel(telemetry.generatedTokens)
+    } else ui.runtimeStatus
 
     LaunchedEffect(ui.error, ui.notice) {
         val text = ui.error ?: ui.notice
@@ -124,7 +132,7 @@ fun JinkakuApp(vm: JinkakuViewModel) {
                             ) { Text("☰", style = MaterialTheme.typography.titleLarge) }
                             Column(Modifier.weight(1f)) {
                                 Text("Jinkaku", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                                Text("${ui.runtimeStatus}  •  Memory ${ui.memoryCount}", style = MaterialTheme.typography.labelMedium)
+                                Text("$statusText  •  Memory ${ui.memoryCount}", style = MaterialTheme.typography.labelMedium)
                             }
                             if (screen == MainScreen.CHAT) {
                                 TextButton(onClick = {
@@ -182,7 +190,7 @@ private fun ChatScreen(vm: JinkakuViewModel, modifier: Modifier = Modifier) {
     val keyboard = LocalSoftwareKeyboardController.current
     val listState = rememberLazyListState()
 
-    LaunchedEffect(ui.messages.size, ui.generatingText.length, ui.thinking) {
+    LaunchedEffect(ui.messages.size, ui.generatingText.length, ui.thinking, telemetry.generatedTokens) {
         val total = ui.messages.size + if (ui.busy && (ui.thinking || ui.generatingText.isNotBlank())) 1 else 0
         if (total > 0) listState.animateScrollToItem(total - 1)
     }
@@ -233,7 +241,7 @@ private fun ChatScreen(vm: JinkakuViewModel, modifier: Modifier = Modifier) {
                     Surface(shape = RoundedCornerShape(18.dp), tonalElevation = 1.dp) {
                         Column(Modifier.padding(14.dp)) {
                             if (ui.thinking && ui.generatingText.isBlank()) {
-                                Text("入力中…", style = MaterialTheme.typography.labelMedium)
+                                Text(typingLabel(telemetry.generatedTokens), style = MaterialTheme.typography.labelMedium)
                             }
                             if (ui.generatingText.isNotBlank()) Text(ui.generatingText)
                         }
@@ -308,6 +316,15 @@ private fun InferenceStatsLine(telemetry: InferenceTelemetryState, modifier: Mod
 private fun MemoryScreen(vm: JinkakuViewModel, modifier: Modifier = Modifier) {
     val ui by vm.ui.collectAsStateWithLifecycle()
     var confirmClear by remember { mutableStateOf(false) }
+    var addingMemory by remember { mutableStateOf(false) }
+
+    if (addingMemory) {
+        ManualMemoryDialog(
+            vm = vm,
+            embeddingInstalled = ui.embeddingInstalled,
+            onDismiss = { addingMemory = false }
+        )
+    }
 
     if (confirmClear) {
         AlertDialog(
@@ -334,10 +351,20 @@ private fun MemoryScreen(vm: JinkakuViewModel, modifier: Modifier = Modifier) {
                     }
                     OutlinedButton(onClick = vm::refresh) { Text("更新") }
                 }
-                OutlinedButton(
-                    onClick = { confirmClear = true },
-                    enabled = ui.memoryCount > 0 && !ui.busy && !ui.embeddingReindexing
-                ) { Text("Memoryを全削除") }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = { addingMemory = true },
+                        enabled = !ui.busy && !ui.embeddingReindexing
+                    ) { Text("＋ Memory追加") }
+                    OutlinedButton(
+                        onClick = { confirmClear = true },
+                        enabled = ui.memoryCount > 0 && !ui.busy && !ui.embeddingReindexing
+                    ) { Text("全削除") }
+                }
+                Text(
+                    "手動MemoryではPersona、過去の出来事、好み、関係性、プロジェクトなどを直接登録できます。",
+                    style = MaterialTheme.typography.bodySmall
+                )
                 if (ui.embeddingReindexing) {
                     LinearProgressIndicator(
                         progress = { (ui.embeddingReindexProgress ?: 0f).coerceIn(0f, 1f) },
@@ -424,7 +451,7 @@ private fun SettingsScreen(
                         ) { Text("Personaを保存") }
                         OutlinedButton(onClick = { personaDraft = vm.currentPersona() }) { Text("再読込") }
                     }
-                    Text("保存するたびにRevisionとして履歴へ残ります。次の会話からSystem Promptへ反映されます。", style = MaterialTheme.typography.bodySmall)
+                    Text("保存するたびにRevisionとして履歴へ残ります。Personaの一部を長期Memoryにも残したい場合は左上 → Memory → Memory追加からPERSONAを選択できます。", style = MaterialTheme.typography.bodySmall)
                 }
             }
         }
@@ -488,7 +515,7 @@ private fun SettingsScreen(
         item {
             Text("推論表示", fontWeight = FontWeight.Bold)
             Text(
-                "CoTは有効で本文は非表示です。生成中は「入力中…」と表示し、Prefill/Decode速度・token数・Backendは回答完了後だけ吹き出し下へ表示します。",
+                "CoTは有効で本文は非表示です。思考中は実際の生成tokenが進むたびに「入力中. → 入力中.. → 入力中...」が変化します。tokenが止まれば点も止まります。Prefill/Decode速度・token数・Backendは回答完了後だけ表示します。",
                 style = MaterialTheme.typography.bodySmall
             )
         }
@@ -511,7 +538,7 @@ private fun SettingsScreen(
                     modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
                 )
             }
-            Text("Memoryの中身と全削除は左上メニュー → Memoryから操作できます。", style = MaterialTheme.typography.bodySmall)
+            Text("Memoryの閲覧・手動追加・全削除は左上メニュー → Memoryから操作できます。", style = MaterialTheme.typography.bodySmall)
         }
         item {
             Text("メンテナンス", fontWeight = FontWeight.Bold)
