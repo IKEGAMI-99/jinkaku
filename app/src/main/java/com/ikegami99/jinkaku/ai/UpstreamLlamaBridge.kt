@@ -17,8 +17,8 @@ internal class UpstreamLlamaBridge {
         check(error == null) { "llama.cpp初期化失敗: $error" }
     }
 
-    fun load(modelPath: String, contextSize: Int) {
-        val error = nativeLoad(modelPath, contextSize)
+    fun load(modelPath: String, contextSize: Int, backend: InferenceBackend, gpuLayers: Int) {
+        val error = nativeLoad(modelPath, contextSize, backend.id, gpuLayers)
         check(error == null) { "llama.cppモデル読込失敗: $error" }
     }
 
@@ -28,6 +28,8 @@ internal class UpstreamLlamaBridge {
     }
 
     fun nextTokenBytes(): ByteArray? = nativeNext()
+
+    fun backend(): String = nativeBackend() ?: "CPU"
 
     fun stats(): NativeInferenceStats {
         val raw = nativeStats()
@@ -40,7 +42,7 @@ internal class UpstreamLlamaBridge {
             prefillMicros = raw[4],
             decodeMicros = raw[5],
             maxGenerationTokens = raw[6].toInt(),
-            backend = "CPU"
+            backend = backend()
         )
     }
 
@@ -49,10 +51,11 @@ internal class UpstreamLlamaBridge {
     fun unload() = nativeUnload()
 
     private external fun nativeInit(): String?
-    private external fun nativeLoad(modelPath: String, contextSize: Int): String?
+    private external fun nativeLoad(modelPath: String, contextSize: Int, backendMode: Int, gpuLayers: Int): String?
     private external fun nativeBegin(roles: Array<String>, contents: Array<String>, maxTokens: Int): String?
     private external fun nativeNext(): ByteArray?
     private external fun nativeStats(): LongArray
+    private external fun nativeBackend(): String?
     private external fun nativeStop()
     private external fun nativeUnload()
 
