@@ -184,6 +184,14 @@ class JinkakuDatabase(context: Context) : SQLiteOpenHelper(context, "jinkaku.db"
         return out
     }
 
+    fun updateMemoryEmbedding(id: Long, embedding: FloatArray) {
+        val v = ContentValues().apply {
+            put("embedding", floatsToBlob(embedding))
+            put("updated_at", System.currentTimeMillis())
+        }
+        writableDatabase.update("memories", v, "id=?", arrayOf(id.toString()))
+    }
+
     fun touchMemories(ids: List<Long>) {
         val now = System.currentTimeMillis()
         ids.forEach { writableDatabase.execSQL("UPDATE memories SET last_accessed=?,access_count=access_count+1 WHERE id=?", arrayOf<Any?>(now,it)) }
