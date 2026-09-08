@@ -32,6 +32,7 @@ jobs:
         run: |
           python3 scripts/patch_cpu_speed_v022.py
           python3 scripts/patch_v024_thinking_idle_memory.py
+          python3 scripts/fix_v024_prompt_patch.py
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
