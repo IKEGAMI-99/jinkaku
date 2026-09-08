@@ -3,6 +3,7 @@
 #include <atomic>
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <mutex>
 #include <string>
@@ -20,6 +21,8 @@ namespace {
 std::mutex g_mutex;
 std::atomic_bool g_stop{false};
 bool g_backend_initialized = false;
+
+// Main E4B chat runtime.
 llama_model * g_model = nullptr;
 llama_context * g_ctx = nullptr;
 const llama_vocab * g_vocab = nullptr;
@@ -33,9 +36,27 @@ int32_t g_context_size = 0;
 int64_t g_prefill_us = 0;
 int64_t g_decode_started_us = 0;
 
+// Separate EmbeddingGemma runtime. Keeping it separate prevents memory lookup
+// from clearing or otherwise mutating the E4B chat context.
+llama_model * g_emb_model = nullptr;
+llama_context * g_emb_ctx = nullptr;
+const llama_vocab * g_emb_vocab = nullptr;
+int32_t g_emb_context_size = 0;
+
 int64_t now_us() {
     return std::chrono::duration_cast<std::chrono::microseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+void ensure_backend_initialized() {
+    if (g_backend_initialized) return;
+    llama_log_set([](enum ggml_log_level level, const char * text, void *) {
+        if (level >= GGML_LOG_LEVEL_ERROR) LOGE("%s", text);
+        else if (level == GGML_LOG_LEVEL_WARN) LOGW("%s", text);
+    }, nullptr);
+    llama_backend_init();
+    g_backend_initialized = true;
+    LOGI("upstream llama.cpp backend initialized");
 }
 
 void append_utf8(std::string & out, uint32_t cp) {
@@ -107,6 +128,19 @@ void free_model_locked() {
     g_decode_started_us = 0;
 }
 
+void free_embedding_locked() {
+    if (g_emb_ctx) {
+        llama_free(g_emb_ctx);
+        g_emb_ctx = nullptr;
+    }
+    if (g_emb_model) {
+        llama_model_free(g_emb_model);
+        g_emb_model = nullptr;
+    }
+    g_emb_vocab = nullptr;
+    g_emb_context_size = 0;
+}
+
 bool add_batch_token(llama_batch & batch, llama_token token, llama_pos pos, bool logits) {
     const int i = batch.n_tokens;
     batch.token[i] = token;
@@ -167,21 +201,27 @@ jbyteArray to_byte_array(JNIEnv * env, const std::string & value) {
     }
     return arr;
 }
+
+jfloatArray to_float_array(JNIEnv * env, const float * values, int32_t size) {
+    if (!values || size <= 0) return nullptr;
+    std::vector<float> normalized(static_cast<size_t>(size));
+    double norm2 = 0.0;
+    for (int32_t i = 0; i < size; ++i) norm2 += static_cast<double>(values[i]) * values[i];
+    const double norm = std::sqrt(norm2);
+    const float scale = norm > 0.0 ? static_cast<float>(1.0 / norm) : 1.0f;
+    for (int32_t i = 0; i < size; ++i) normalized[static_cast<size_t>(i)] = values[i] * scale;
+    jfloatArray result = env->NewFloatArray(size);
+    if (!result) return nullptr;
+    env->SetFloatArrayRegion(result, 0, size, normalized.data());
+    return result;
+}
 } // namespace
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_ikegami99_jinkaku_ai_UpstreamLlamaBridge_nativeInit(JNIEnv * env, jobject) {
     std::lock_guard<std::mutex> lock(g_mutex);
     try {
-        if (!g_backend_initialized) {
-            llama_log_set([](enum ggml_log_level level, const char * text, void *) {
-                if (level >= GGML_LOG_LEVEL_ERROR) LOGE("%s", text);
-                else if (level == GGML_LOG_LEVEL_WARN) LOGW("%s", text);
-            }, nullptr);
-            llama_backend_init();
-            g_backend_initialized = true;
-            LOGI("upstream llama.cpp backend initialized");
-        }
+        ensure_backend_initialized();
         return nullptr;
     } catch (const std::exception & e) {
         return error_string(env, e.what());
@@ -192,6 +232,7 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_com_ikegami99_jinkaku_ai_UpstreamLlamaBridge_nativeLoad(JNIEnv * env, jobject, jstring modelPath, jint contextSize) {
     std::lock_guard<std::mutex> lock(g_mutex);
     try {
+        ensure_backend_initialized();
         free_model_locked();
         const std::string path = from_jstring(env, modelPath);
         if (path.empty()) return error_string(env, "empty model path");
@@ -338,12 +379,9 @@ Java_com_ikegami99_jinkaku_ai_UpstreamLlamaBridge_nativeNext(JNIEnv * env, jobje
     try {
         const llama_token token = llama_sampler_sample(g_sampler, g_ctx, -1);
         llama_sampler_accept(g_sampler, token);
-        if (llama_vocab_is_eog(g_vocab, token)) {
-            return nullptr;
-        }
+        if (llama_vocab_is_eog(g_vocab, token)) return nullptr;
 
         const std::string piece = token_piece(token);
-
         llama_batch batch = llama_batch_init(1, 0, 1);
         if (!batch.token) {
             llama_batch_free(batch);
@@ -404,4 +442,124 @@ Java_com_ikegami99_jinkaku_ai_UpstreamLlamaBridge_nativeUnload(JNIEnv *, jobject
     std::lock_guard<std::mutex> lock(g_mutex);
     free_model_locked();
     LOGI("model unloaded");
+}
+
+// -----------------------------------------------------------------------------
+// EmbeddingGemma JNI
+// -----------------------------------------------------------------------------
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_ikegami99_jinkaku_ai_EmbeddingGemmaBridge_nativeEmbeddingLoad(
+        JNIEnv * env, jobject, jstring modelPath) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    try {
+        ensure_backend_initialized();
+        free_embedding_locked();
+        const std::string path = from_jstring(env, modelPath);
+        if (path.empty()) return error_string(env, "empty embedding model path");
+
+        llama_model_params mparams = llama_model_default_params();
+        mparams.n_gpu_layers = 0;
+        g_emb_model = llama_model_load_from_file(path.c_str(), mparams);
+        if (!g_emb_model) return error_string(env, "embedding llama_model_load_from_file returned null");
+        g_emb_vocab = llama_model_get_vocab(g_emb_model);
+        if (!g_emb_vocab) {
+            free_embedding_locked();
+            return error_string(env, "embedding llama_model_get_vocab returned null");
+        }
+
+        llama_context_params cparams = llama_context_default_params();
+        cparams.n_ctx = 1024;
+        cparams.n_batch = 1024;
+        cparams.n_ubatch = 1024;
+        cparams.n_threads = 4;
+        cparams.n_threads_batch = 4;
+        cparams.embeddings = true;
+        cparams.pooling_type = LLAMA_POOLING_TYPE_UNSPECIFIED;
+        cparams.attention_type = LLAMA_ATTENTION_TYPE_UNSPECIFIED;
+
+        g_emb_ctx = llama_init_from_model(g_emb_model, cparams);
+        if (!g_emb_ctx) {
+            free_embedding_locked();
+            return error_string(env, "embedding llama_init_from_model returned null");
+        }
+        g_emb_context_size = 1024;
+        LOGI("EmbeddingGemma loaded ctx=1024 backend=CPU dim=%d pooling=%d",
+             llama_model_n_embd_out(g_emb_model), static_cast<int>(llama_pooling_type(g_emb_ctx)));
+        return nullptr;
+    } catch (const std::exception & e) {
+        free_embedding_locked();
+        return error_string(env, std::string("embedding load exception: ") + e.what());
+    } catch (...) {
+        free_embedding_locked();
+        return error_string(env, "embedding load unknown exception");
+    }
+}
+
+extern "C" JNIEXPORT jfloatArray JNICALL
+Java_com_ikegami99_jinkaku_ai_EmbeddingGemmaBridge_nativeEmbeddingEncode(
+        JNIEnv * env, jobject, jstring inputText) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (!g_emb_model || !g_emb_ctx || !g_emb_vocab) return nullptr;
+    try {
+        const std::string text = from_jstring(env, inputText);
+        if (text.empty()) return nullptr;
+
+        const int neededRaw = llama_tokenize(
+            g_emb_vocab, text.data(), static_cast<int32_t>(text.size()), nullptr, 0, true, true);
+        const int needed = neededRaw < 0 ? -neededRaw : neededRaw;
+        if (needed <= 0 || needed > g_emb_context_size) {
+            LOGE("EmbeddingGemma token count invalid: %d/%d", needed, g_emb_context_size);
+            return nullptr;
+        }
+
+        std::vector<llama_token> tokens(static_cast<size_t>(needed));
+        const int tokenized = llama_tokenize(
+            g_emb_vocab, text.data(), static_cast<int32_t>(text.size()), tokens.data(),
+            static_cast<int32_t>(tokens.size()), true, true);
+        if (tokenized <= 0) return nullptr;
+        tokens.resize(static_cast<size_t>(tokenized));
+
+        llama_memory_clear(llama_get_memory(g_emb_ctx), true);
+        llama_batch batch = llama_batch_init(tokenized, 0, 1);
+        if (!batch.token || !batch.pos || !batch.n_seq_id || !batch.seq_id || !batch.logits) {
+            llama_batch_free(batch);
+            return nullptr;
+        }
+        batch.n_tokens = 0;
+        for (int i = 0; i < tokenized; ++i) {
+            add_batch_token(batch, tokens[static_cast<size_t>(i)], static_cast<llama_pos>(i), true);
+        }
+
+        const int64_t started = now_us();
+        const int rc = llama_decode(g_emb_ctx, batch);
+        llama_batch_free(batch);
+        if (rc != 0) {
+            LOGE("EmbeddingGemma llama_decode failed rc=%d", rc);
+            return nullptr;
+        }
+
+        const float * emb = llama_get_embeddings_seq(g_emb_ctx, 0);
+        if (!emb) emb = llama_get_embeddings_ith(g_emb_ctx, -1);
+        const int32_t dim = llama_model_n_embd_out(g_emb_model);
+        if (!emb || dim <= 0) {
+            LOGE("EmbeddingGemma output missing dim=%d", dim);
+            return nullptr;
+        }
+        const double elapsed_ms = (now_us() - started) / 1000.0;
+        LOGI("EmbeddingGemma encoded tokens=%d dim=%d elapsed=%.1fms", tokenized, dim, elapsed_ms);
+        return to_float_array(env, emb, dim);
+    } catch (const std::exception & e) {
+        LOGE("EmbeddingGemma encode exception: %s", e.what());
+        return nullptr;
+    } catch (...) {
+        LOGE("EmbeddingGemma encode unknown exception");
+        return nullptr;
+    }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_ikegami99_jinkaku_ai_EmbeddingGemmaBridge_nativeEmbeddingUnload(JNIEnv *, jobject) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    free_embedding_locked();
+    LOGI("EmbeddingGemma unloaded");
 }
