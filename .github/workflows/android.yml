@@ -47,6 +47,18 @@ jobs:
             -DSPIRV_HEADERS_ENABLE_INSTALL=ON
           cmake --install /tmp/spirv-headers-build
           test -f "$SYSROOT/usr/share/cmake/SPIRV-Headers/SPIRV-HeadersConfig.cmake"
+      - name: Prepare Android Vulkan headers
+        shell: bash
+        run: |
+          set -euxo pipefail
+          NDK="$ANDROID_HOME/ndk/29.0.13113456"
+          SYSROOT="$NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+          rm -rf /tmp/Vulkan-Headers
+          git clone --depth 1 https://github.com/KhronosGroup/Vulkan-Headers.git /tmp/Vulkan-Headers
+          mkdir -p "$SYSROOT/usr/include"
+          rm -rf "$SYSROOT/usr/include/vulkan"
+          cp -r /tmp/Vulkan-Headers/include/vulkan "$SYSROOT/usr/include/"
+          test -f "$SYSROOT/usr/include/vulkan/vulkan.hpp"
       - name: Prepare Android OpenCL headers and ICD loader
         shell: bash
         run: |
