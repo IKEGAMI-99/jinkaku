@@ -56,6 +56,7 @@ jobs:
           python3 scripts/patch_v024_thinking_idle_memory.py
           python3 scripts/fix_v024_prompt_patch.py
           python3 scripts/patch_v025_gpu_prefill.py
+          python3 scripts/fix_v025_phase_counters.py
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
