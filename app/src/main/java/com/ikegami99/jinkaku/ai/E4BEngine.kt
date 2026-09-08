@@ -34,7 +34,7 @@ class E4BEngine(
         unload()
         logger.i(
             "E4B",
-            "Loading with upstream llama.cpp CPU runtime ctx=$contextSize jinja=true thinking=true"
+            "Loading with upstream llama.cpp CPU runtime ctx=$contextSize jinja=true thinking=false threads=6"
         )
         bridge.load(model.absolutePath, contextSize.toInt())
         loadedPath = model.absolutePath
@@ -80,7 +80,7 @@ class E4BEngine(
         (context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager).getMemoryInfo(memoryInfo)
         logger.i(
             "E4B",
-            "Generation start UPSTREAM_LLAMA_CPP model=${model.name} size=${model.length()} requestedCtx=$contextSize history=${history.size} availMem=${memoryInfo.availMem} lowMemory=${memoryInfo.lowMemory}"
+            "Generation start UPSTREAM_LLAMA_CPP_DIRECT model=${model.name} size=${model.length()} requestedCtx=$contextSize history=${history.size} availMem=${memoryInfo.availMem} lowMemory=${memoryInfo.lowMemory}"
         )
 
         if (memoryInfo.lowMemory || memoryInfo.availMem < 3_500_000_000L) {
@@ -95,7 +95,7 @@ class E4BEngine(
         val roles = ArrayList<String>()
         val contents = ArrayList<String>()
         roles += "system"
-        contents += systemPrompt
+        contents += buildDirectSystemPrompt(systemPrompt)
         history.takeLast(MAX_HISTORY_MESSAGES).forEach { message ->
             when (message.role) {
                 ROLE_USER -> {
@@ -118,8 +118,11 @@ class E4BEngine(
         var emittedPieces = 0
 
         bridge.begin(roles.toTypedArray(), contents.toTypedArray(), MAX_GENERATION_TOKENS)
-        logger.i("E4B", "Upstream Jinja prompt accepted messages=${roles.size} enableThinking=true")
-        emit(GenerationEvent.Thinking)
+        logger.i("E4B", "Upstream Jinja prompt accepted messages=${roles.size} enableThinking=false maxTokens=$MAX_GENERATION_TOKENS")
+
+        // Tell the UI generation has started immediately. This clears the old
+        // "thinking" indicator without waiting for a visible model token.
+        emit(GenerationEvent.Text(""))
 
         try {
             while (true) {
@@ -133,6 +136,8 @@ class E4BEngine(
                     bridge.stop()
                     break
                 }
+                // CoT is disabled at the Jinja level. Keep this filter only as a
+                // safety net for a model that unexpectedly emits thought markers.
                 val visible = filter.accept(chunk)
                 if (visible.isNotEmpty()) {
                     final += visible
@@ -153,10 +158,25 @@ class E4BEngine(
         val elapsed = System.currentTimeMillis() - started
         logger.i(
             "E4B",
-            "Generation complete UPSTREAM_LLAMA_CPP elapsedMs=$elapsed visibleChars=${cleaned.length} rawChars=$rawChars thoughtMarker=${filter.sawThinkingMarker} pieces=$emittedPieces"
+            "Generation complete UPSTREAM_LLAMA_CPP_DIRECT elapsedMs=$elapsed visibleChars=${cleaned.length} rawChars=$rawChars thoughtMarker=${filter.sawThinkingMarker} pieces=$emittedPieces"
         )
         emit(GenerationEvent.Completed(cleaned, elapsed))
     }.flowOn(Dispatchers.Default)
+
+    private fun buildDirectSystemPrompt(systemPrompt: String): String {
+        val stripped = systemPrompt
+            .replace("<|think|>", "")
+            .replace("<think>", "")
+            .replace("</think>", "")
+            .replace(
+                "Think carefully before answering, but keep internal reasoning private. Output only the final answer after thinking.",
+                "Answer directly."
+            )
+            .trim()
+
+        return """Answer directly and begin the answer immediately. Do not generate chain-of-thought, hidden reasoning, analysis/thought channels, or <think> blocks. Keep the response useful and concise unless the user asks for detail.
+$stripped""".trimIndent()
+    }
 
     private fun cleanControlTokens(value: String): String = value
         .replace("<|channel>final", "")
@@ -181,8 +201,8 @@ class E4BEngine(
 
     companion object {
         private const val MAX_RAW_OUTPUT_CHARS = 16_000
-        private const val MAX_GENERATION_TOKENS = 512
-        private const val MAX_HISTORY_MESSAGES = 6
+        private const val MAX_GENERATION_TOKENS = 640
+        private const val MAX_HISTORY_MESSAGES = 4
     }
 }
 
