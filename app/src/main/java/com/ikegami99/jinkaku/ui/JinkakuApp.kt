@@ -17,6 +17,8 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.ikegami99.jinkaku.JinkakuViewModel
+import com.ikegami99.jinkaku.ai.InferenceTelemetry
+import com.ikegami99.jinkaku.ai.InferenceTelemetryState
 import com.ikegami99.jinkaku.data.ROLE_USER
 import kotlinx.coroutines.launch
 
@@ -131,40 +133,65 @@ fun JinkakuApp(vm: JinkakuViewModel) {
 @Composable
 private fun ChatScreen(vm: JinkakuViewModel, modifier: Modifier = Modifier) {
     val ui by vm.ui.collectAsStateWithLifecycle()
+    val telemetry by InferenceTelemetry.state.collectAsStateWithLifecycle()
     var input by remember { mutableStateOf("") }
+
     Column(modifier.fillMaxSize().imePadding()) {
+        ContextMeter(telemetry = telemetry, configuredContext = ui.contextSize.toInt())
+
         LazyColumn(
             Modifier.weight(1f).fillMaxWidth(),
             contentPadding = PaddingValues(12.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             items(ui.messages, key = { it.id }) { m ->
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = if (m.role == ROLE_USER) Arrangement.End else Arrangement.Start
-                ) {
-                    Surface(
-                        shape = RoundedCornerShape(18.dp),
-                        tonalElevation = if (m.role == ROLE_USER) 3.dp else 1.dp,
-                        modifier = Modifier.fillMaxWidth(0.88f)
+                Column(Modifier.fillMaxWidth()) {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = if (m.role == ROLE_USER) Arrangement.End else Arrangement.Start
                     ) {
-                        Text(m.content, Modifier.padding(14.dp))
+                        Surface(
+                            shape = RoundedCornerShape(18.dp),
+                            tonalElevation = if (m.role == ROLE_USER) 3.dp else 1.dp,
+                            modifier = Modifier.fillMaxWidth(0.88f)
+                        ) {
+                            Text(m.content, Modifier.padding(14.dp))
+                        }
+                    }
+                    if (
+                        m.role != ROLE_USER &&
+                        telemetry.phase == "DONE" &&
+                        telemetry.finalTextHash != null &&
+                        telemetry.finalTextHash == m.content.hashCode()
+                    ) {
+                        InferenceStatsLine(
+                            telemetry,
+                            Modifier.padding(start = 8.dp, top = 4.dp)
+                        )
                     }
                 }
             }
+
             if (ui.busy && (ui.thinking || ui.generatingText.isNotBlank())) {
                 item {
-                    Surface(shape = RoundedCornerShape(18.dp), tonalElevation = 1.dp) {
-                        Column(Modifier.padding(14.dp)) {
-                            if (ui.thinking && ui.generatingText.isBlank()) {
-                                Text("Thinking…", style = MaterialTheme.typography.labelMedium)
+                    Column(Modifier.fillMaxWidth()) {
+                        Surface(shape = RoundedCornerShape(18.dp), tonalElevation = 1.dp) {
+                            Column(Modifier.padding(14.dp)) {
+                                if (ui.thinking && ui.generatingText.isBlank()) {
+                                    Text("Thinking…", style = MaterialTheme.typography.labelMedium)
+                                }
+                                if (ui.generatingText.isNotBlank()) Text(ui.generatingText)
                             }
-                            if (ui.generatingText.isNotBlank()) Text(ui.generatingText)
                         }
+                        InferenceStatsLine(
+                            telemetry,
+                            Modifier.padding(start = 8.dp, top = 4.dp)
+                        )
                     }
                 }
             }
         }
+
         HorizontalDivider()
         Row(Modifier.fillMaxWidth().padding(10.dp), verticalAlignment = Alignment.Bottom) {
             OutlinedTextField(
@@ -189,6 +216,53 @@ private fun ChatScreen(vm: JinkakuViewModel, modifier: Modifier = Modifier) {
             }
         }
     }
+}
+
+@Composable
+private fun ContextMeter(telemetry: InferenceTelemetryState, configuredContext: Int) {
+    val max = if (telemetry.contextMax > 0) telemetry.contextMax else configuredContext
+    val used = if (telemetry.contextMax > 0) telemetry.contextUsed.coerceIn(0, max) else 0
+    val remaining = (max - used).coerceAtLeast(0)
+    val fraction = if (max > 0) used.toFloat() / max.toFloat() else 0f
+
+    Surface(tonalElevation = 1.dp) {
+        Column(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(5.dp)
+        ) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "Context $used / $max",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Spacer(Modifier.weight(1f))
+                Text("残り $remaining tok", style = MaterialTheme.typography.labelSmall)
+            }
+            LinearProgressIndicator(
+                progress = { fraction.coerceIn(0f, 1f) },
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+    }
+}
+
+@Composable
+private fun InferenceStatsLine(telemetry: InferenceTelemetryState, modifier: Modifier = Modifier) {
+    val phase = when (telemetry.phase) {
+        "LOADING" -> "LOADING"
+        "PREFILL" -> "PREFILL"
+        "THINKING" -> "THINKING"
+        "DECODE" -> "DECODE"
+        "DONE" -> "DONE"
+        "STOPPED" -> "STOPPED"
+        else -> telemetry.phase
+    }
+    Text(
+        "$phase  •  Prefill ${telemetry.prefillLabel()} tok/s  •  Decode ${telemetry.decodeLabel()} tok/s  •  Gen ${telemetry.generatedTokens} tok  •  ${telemetry.backend}",
+        modifier = modifier,
+        style = MaterialTheme.typography.labelSmall
+    )
 }
 
 @Composable
@@ -252,7 +326,14 @@ private fun SettingsScreen(
                     )
                 }
             }
-            Text("現在はCPU安定性優先で1K/2Kに制限しています。", style = MaterialTheme.typography.bodySmall)
+            Text("現在はCPU安定性優先で1K/2Kに制限しています。チャット画面上部に使用量と残量を表示します。", style = MaterialTheme.typography.bodySmall)
+        }
+        item {
+            Text("推論表示", fontWeight = FontWeight.Bold)
+            Text(
+                "CoTは有効です。思考本文は非表示ですが、Prefill/Decode速度、生成token数、Backend、Context残量をリアルタイム表示します。現在のE4B backendはCPUです。",
+                style = MaterialTheme.typography.bodySmall
+            )
         }
         item {
             Text("長期メモリ", fontWeight = FontWeight.Bold)
