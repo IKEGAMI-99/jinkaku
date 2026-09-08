@@ -18,15 +18,32 @@ class ModelManager(private val context: Context, private val logger: AppLogger) 
     val e2bFile = File(root, E2B_FILE)
 
     init {
+        val legacy = File(root, LEGACY_E4B_FILE)
+        if (!e4bFile.exists() && legacy.exists()) {
+            if (legacy.renameTo(e4bFile)) {
+                logger.i("MODEL", "Migrated legacy E4B filename to ${e4bFile.name}")
+            } else {
+                logger.w("MODEL", "Could not migrate legacy E4B filename; using legacy file in place")
+            }
+        }
         listOf(File(root, "$E4B_FILE.importing"), File(root, "$E2B_FILE.importing")).forEach { stale ->
             if (stale.exists() && stale.delete()) logger.w("MODEL", "Removed stale import file ${stale.name}")
         }
     }
 
-    fun isE4BInstalled() = e4bFile.exists() && e4bFile.length() > 4L && runCatching {
-        FileInputStream(e4bFile).use { String(it.readNBytes(4), Charsets.US_ASCII) == "GGUF" }
-    }.getOrDefault(false)
+    private fun activeE4BFile(): File {
+        if (e4bFile.exists()) return e4bFile
+        val legacy = File(root, LEGACY_E4B_FILE)
+        return if (legacy.exists()) legacy else e4bFile
+    }
 
+    fun isE4BInstalled() = activeE4BFile().let { file ->
+        file.exists() && file.length() > 4L && runCatching {
+            FileInputStream(file).use { String(it.readNBytes(4), Charsets.US_ASCII) == "GGUF" }
+        }.getOrDefault(false)
+    }
+
+    fun getE4BFile(): File = activeE4BFile()
     fun isE2BInstalled() = e2bFile.exists() && e2bFile.length() > 1_000_000_000L
     fun downloadE4B(): Long = enqueue(E4B_URL, E4B_FILE, "e4b")
     fun downloadE2B(): Long = enqueue(E2B_URL, E2B_FILE, "e2b")
@@ -44,12 +61,14 @@ class ModelManager(private val context: Context, private val logger: AppLogger) 
             .setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS, "models/$filename")
         val id = (context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
         prefs.edit().putLong(key, id).apply()
-        logger.i("MODEL", "Download queued key=$key id=$id")
+        logger.i("MODEL", "Download queued key=$key id=$id url=$url")
         return id
     }
 
     fun importE4B(uri: Uri, onProgress: (Float?) -> Unit = {}): ImportResult {
         cancelActiveDownload("e4b")
+        val legacy = File(root, LEGACY_E4B_FILE)
+        if (legacy.exists() && legacy != e4bFile) legacy.delete()
         return importFromUri(uri, e4bFile, ModelType.E4B_GGUF, onProgress)
     }
 
@@ -171,7 +190,12 @@ class ModelManager(private val context: Context, private val logger: AppLogger) 
         }
     }
 
-    fun deleteE4B() { e4bFile.delete(); File(root, e4bFile.name + ".importing").delete(); logger.i("MODEL", "E4B deleted") }
+    fun deleteE4B() {
+        e4bFile.delete()
+        File(root, LEGACY_E4B_FILE).delete()
+        File(root, e4bFile.name + ".importing").delete()
+        logger.i("MODEL", "E4B deleted")
+    }
     fun deleteE2B() { e2bFile.delete(); File(root, e2bFile.name + ".importing").delete(); logger.i("MODEL", "E2B deleted") }
 
     fun verifyE2BSha256(): Boolean {
@@ -200,9 +224,10 @@ class ModelManager(private val context: Context, private val logger: AppLogger) 
         private const val COPY_BUFFER_BYTES = 4 * 1024 * 1024
         private const val PROGRESS_REPORT_BYTES = 32L * 1024L * 1024L
         private const val IMPORT_HEADROOM_BYTES = 256L * 1024L * 1024L
-        const val E4B_FILE = "Gemma-4-E4B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf"
+        const val E4B_FILE = "Gemma-4-E4B-HauhauCS.gguf"
+        const val LEGACY_E4B_FILE = "Gemma-4-E4B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf"
         const val E2B_FILE = "gemma-4-E2B-it.litertlm"
-        const val E4B_URL = "https://huggingface.co/HauhauCS/Gemma-4-E4B-Uncensored-HauhauCS-Aggressive/resolve/main/Gemma-4-E4B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf?download=true"
+        const val E4B_URL = "https://huggingface.co/HauhauCS/Gemma-4-E4B-Uncensored-HauhauCS-Aggressive/resolve/main/Gemma-4-E4B-Uncensored-HauhauCS-Aggressive-Q2_K_P.gguf?download=true"
         const val E2B_URL = "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm?download=true"
         const val E2B_SHA256 = "181938105e0eefd105961417e8da75903eacda102c4fce9ce90f50b97139a63c"
     }
