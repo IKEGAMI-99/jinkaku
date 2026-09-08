@@ -9,12 +9,14 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.ikegami99.jinkaku.ai.E2BMemoryEngine
 import com.ikegami99.jinkaku.ai.E4BEngine
+import com.ikegami99.jinkaku.ai.EmbeddingGemmaEngine
 import com.ikegami99.jinkaku.ai.GenerationEvent
 import com.ikegami99.jinkaku.ai.MemoryEngine
 import com.ikegami99.jinkaku.backup.BackupManager
 import com.ikegami99.jinkaku.data.ChatMessage
 import com.ikegami99.jinkaku.data.ChatSession
 import com.ikegami99.jinkaku.data.JinkakuDatabase
+import com.ikegami99.jinkaku.data.MemoryRecord
 import com.ikegami99.jinkaku.data.ROLE_ASSISTANT
 import com.ikegami99.jinkaku.data.ROLE_USER
 import com.ikegami99.jinkaku.logging.AppLogger
@@ -38,6 +40,7 @@ import java.io.File
 data class UiState(
     val messages: List<ChatMessage> = emptyList(),
     val chats: List<ChatSession> = emptyList(),
+    val memories: List<MemoryRecord> = emptyList(),
     val currentChatId: Long = -1L,
     val generatingText: String = "",
     val thinking: Boolean = false,
@@ -46,12 +49,19 @@ data class UiState(
     val memoryCount: Int = 0,
     val e4bInstalled: Boolean = false,
     val e2bInstalled: Boolean = false,
+    val embeddingInstalled: Boolean = false,
     val e4bDownload: DownloadStatus? = null,
     val e2bDownload: DownloadStatus? = null,
+    val embeddingDownload: DownloadStatus? = null,
     val e4bImporting: Boolean = false,
     val e2bImporting: Boolean = false,
+    val embeddingImporting: Boolean = false,
     val e4bImportProgress: Float? = null,
     val e2bImportProgress: Float? = null,
+    val embeddingImportProgress: Float? = null,
+    val embeddingReindexing: Boolean = false,
+    val embeddingReindexProgress: Float? = null,
+    val embeddingEngineName: String = "Hashing-256",
     val contextSize: Long = 2048,
     val error: String? = null,
     val notice: String? = null,
@@ -61,8 +71,8 @@ data class UiState(
 class JinkakuViewModel(app: Application) : AndroidViewModel(app) {
     private val logger: AppLogger = (app as JinkakuApplication).logger
     private var db = JinkakuDatabase(app)
-    private var memory = MemoryEngine(db)
     private val models = ModelManager(app, logger)
+    private var memory = MemoryEngine(db, logger)
     private val e4b = E4BEngine(app, viewModelScope, logger)
     private var e2b = E2BMemoryEngine(app, logger, memory)
     private val updater = AppUpdater(app, logger)
@@ -78,6 +88,7 @@ class JinkakuViewModel(app: Application) : AndroidViewModel(app) {
     val ui: StateFlow<UiState> = _ui.asStateFlow()
 
     init {
+        syncEmbeddingEngine()
         if (previousInferenceInterrupted) {
             logger.w("E4B", "Previous process ended while E4B inference was active; safe mode enabled")
             _ui.value = _ui.value.copy(
@@ -90,6 +101,19 @@ class JinkakuViewModel(app: Application) : AndroidViewModel(app) {
                 delay(1000)
                 refreshDownloads()
             }
+        }
+    }
+
+    private fun anyModelImporting(): Boolean =
+        _ui.value.e4bImporting || _ui.value.e2bImporting || _ui.value.embeddingImporting || _ui.value.embeddingReindexing
+
+    private fun syncEmbeddingEngine() {
+        if (models.isEmbeddingInstalled()) {
+            if (memory.embeddingName != EMBEDDING_ENGINE_NAME) {
+                memory.useEmbedding(EmbeddingGemmaEngine(models.embeddingFile, logger))
+            }
+        } else if (memory.embeddingName != "Hashing-256") {
+            memory.useHashingEmbedding()
         }
     }
 
@@ -123,27 +147,36 @@ class JinkakuViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun refresh() {
+        syncEmbeddingEngine()
         _ui.value = _ui.value.copy(
             messages = db.recentMessages(currentChatId, 100),
             chats = db.listChats(100),
+            memories = db.activeMemories(500),
             currentChatId = currentChatId,
             memoryCount = db.memoryCount(),
             e4bInstalled = models.isE4BInstalled(),
-            e2bInstalled = models.isE2BInstalled()
+            e2bInstalled = models.isE2BInstalled(),
+            embeddingInstalled = models.isEmbeddingInstalled(),
+            embeddingEngineName = memory.embeddingName
         )
     }
 
     private fun refreshDownloads() {
+        val embeddingInstalled = models.isEmbeddingInstalled()
+        if (embeddingInstalled && memory.embeddingName != EMBEDDING_ENGINE_NAME) syncEmbeddingEngine()
         _ui.value = _ui.value.copy(
             e4bDownload = models.status("e4b"),
             e2bDownload = models.status("e2b"),
+            embeddingDownload = models.status("embedding"),
             e4bInstalled = models.isE4BInstalled(),
-            e2bInstalled = models.isE2BInstalled()
+            e2bInstalled = models.isE2BInstalled(),
+            embeddingInstalled = embeddingInstalled,
+            embeddingEngineName = memory.embeddingName
         )
     }
 
     fun newChat() {
-        if (_ui.value.busy || _ui.value.e4bImporting || _ui.value.e2bImporting) {
+        if (_ui.value.busy || anyModelImporting()) {
             setError("処理中は新しいチャットを開始できません")
             return
         }
@@ -156,7 +189,7 @@ class JinkakuViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun selectChat(chatId: Long) {
-        if (_ui.value.busy || _ui.value.e4bImporting || _ui.value.e2bImporting) {
+        if (_ui.value.busy || anyModelImporting()) {
             setError("処理中はチャットを切り替えられません")
             return
         }
@@ -166,7 +199,7 @@ class JinkakuViewModel(app: Application) : AndroidViewModel(app) {
         }
         e4b.unload()
         currentChatId = chatId
-        prefs.edit().putLong(KEY_CURRENT_CHAT_ID, chatId).apply()
+        prefs.edit().putLong(KEY_CURRENT_CHAT_ID, currentChatId).apply()
         _ui.value = _ui.value.copy(generatingText = "", thinking = false, runtimeStatus = "IDLE")
         refresh()
         logger.i("CHAT", "Chat selected id=$chatId")
@@ -175,8 +208,8 @@ class JinkakuViewModel(app: Application) : AndroidViewModel(app) {
     fun send(text: String) {
         val clean = text.trim()
         if (clean.isEmpty() || _ui.value.busy) return
-        if (_ui.value.e4bImporting || _ui.value.e2bImporting) {
-            setError("モデル取り込み中です。完了後に送信してください")
+        if (anyModelImporting()) {
+            setError("モデル処理中です。完了後に送信してください")
             return
         }
         if (!models.isE4BInstalled()) {
@@ -287,7 +320,7 @@ class JinkakuViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun runMemoryMaintenance() {
-        if (_ui.value.busy || _ui.value.e4bImporting || _ui.value.e2bImporting || !models.isE2BInstalled()) return
+        if (_ui.value.busy || anyModelImporting() || !models.isE2BInstalled()) return
         viewModelScope.launch {
             runtimeMutex.withLock {
                 val pending = db.pendingUserMessages(12)
@@ -315,74 +348,118 @@ class JinkakuViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun importE4B(uri: Uri) {
-        if (_ui.value.busy || _ui.value.e4bImporting || _ui.value.e2bImporting) {
-            setError("別の推論またはモデル処理が実行中です")
+    fun reindexMemories() {
+        if (!models.isEmbeddingInstalled()) {
+            setError("EmbeddingGemmaを先にダウンロード、またはローカルから読み込んでください")
             return
         }
+        if (_ui.value.busy || anyModelImporting()) return
         viewModelScope.launch {
             runtimeMutex.withLock {
-                _ui.value = _ui.value.copy(
-                    e4bImporting = true,
-                    e4bImportProgress = 0f,
-                    runtimeStatus = "IMPORTING E4B",
-                    error = null
-                )
+                try {
+                    _ui.value = _ui.value.copy(
+                        busy = true,
+                        embeddingReindexing = true,
+                        embeddingReindexProgress = 0f,
+                        runtimeStatus = "MEMORY REINDEX",
+                        error = null
+                    )
+                    e4b.unload()
+                    syncEmbeddingEngine()
+                    val count = withContext(Dispatchers.IO) {
+                        memory.reindexAll { done, total ->
+                            _ui.value = _ui.value.copy(
+                                embeddingReindexProgress = if (total > 0) done.toFloat() / total else 1f
+                            )
+                        }
+                    }
+                    _ui.value = _ui.value.copy(notice = "MemoryをEmbeddingGemmaで${count}件再索引しました")
+                } catch (t: Throwable) {
+                    logger.e("MEMORY", "Embedding reindex failed", t)
+                    setError("Memory再索引失敗: ${t.message}")
+                } finally {
+                    _ui.value = _ui.value.copy(
+                        busy = false,
+                        embeddingReindexing = false,
+                        embeddingReindexProgress = null,
+                        runtimeStatus = "IDLE"
+                    )
+                    refresh()
+                }
+            }
+        }
+    }
+
+    fun importE4B(uri: Uri) {
+        if (_ui.value.busy || anyModelImporting()) { setError("別の処理が実行中です"); return }
+        viewModelScope.launch {
+            runtimeMutex.withLock {
+                _ui.value = _ui.value.copy(e4bImporting = true, e4bImportProgress = 0f, runtimeStatus = "IMPORTING E4B", error = null)
                 try {
                     e4b.unload()
                     val result = withContext(Dispatchers.IO) {
-                        models.importE4B(uri) { progress ->
-                            _ui.value = _ui.value.copy(e4bImportProgress = progress)
-                        }
+                        models.importE4B(uri) { progress -> _ui.value = _ui.value.copy(e4bImportProgress = progress) }
                     }
                     refresh()
-                    _ui.value = _ui.value.copy(
-                        notice = "E4Bをローカルファイル「${result.sourceName}」から読み込みました"
-                    )
+                    _ui.value = _ui.value.copy(notice = "E4Bをローカルファイル「${result.sourceName}」から読み込みました")
                 } catch (t: Throwable) {
-                    logger.e("MODEL", "E4B local import failed", t)
-                    setError("E4B取り込み失敗: ${t.message}")
+                    logger.e("MODEL", "E4B local import failed", t); setError("E4B取り込み失敗: ${t.message}")
                 } finally {
-                    _ui.value = _ui.value.copy(
-                        e4bImporting = false,
-                        e4bImportProgress = null,
-                        runtimeStatus = "IDLE"
-                    )
+                    _ui.value = _ui.value.copy(e4bImporting = false, e4bImportProgress = null, runtimeStatus = "IDLE")
                 }
             }
         }
     }
 
     fun importE2B(uri: Uri) {
-        if (_ui.value.busy || _ui.value.e4bImporting || _ui.value.e2bImporting) {
-            setError("別の推論またはモデル処理が実行中です")
-            return
+        if (_ui.value.busy || anyModelImporting()) { setError("別の処理が実行中です"); return }
+        viewModelScope.launch {
+            runtimeMutex.withLock {
+                _ui.value = _ui.value.copy(e2bImporting = true, e2bImportProgress = 0f, runtimeStatus = "IMPORTING E2B", error = null)
+                try {
+                    val result = withContext(Dispatchers.IO) {
+                        models.importE2B(uri) { progress -> _ui.value = _ui.value.copy(e2bImportProgress = progress) }
+                    }
+                    refresh()
+                    _ui.value = _ui.value.copy(notice = "E2Bをローカルファイル「${result.sourceName}」から読み込みました")
+                } catch (t: Throwable) {
+                    logger.e("MODEL", "E2B local import failed", t); setError("E2B取り込み失敗: ${t.message}")
+                } finally {
+                    _ui.value = _ui.value.copy(e2bImporting = false, e2bImportProgress = null, runtimeStatus = "IDLE")
+                }
+            }
         }
+    }
+
+    fun importEmbedding(uri: Uri) {
+        if (_ui.value.busy || anyModelImporting()) { setError("別の処理が実行中です"); return }
         viewModelScope.launch {
             runtimeMutex.withLock {
                 _ui.value = _ui.value.copy(
-                    e2bImporting = true,
-                    e2bImportProgress = 0f,
-                    runtimeStatus = "IMPORTING E2B",
+                    embeddingImporting = true,
+                    embeddingImportProgress = 0f,
+                    runtimeStatus = "IMPORTING EMBEDDING",
                     error = null
                 )
                 try {
+                    memory.useHashingEmbedding()
                     val result = withContext(Dispatchers.IO) {
-                        models.importE2B(uri) { progress ->
-                            _ui.value = _ui.value.copy(e2bImportProgress = progress)
+                        models.importEmbedding(uri) { progress ->
+                            _ui.value = _ui.value.copy(embeddingImportProgress = progress)
                         }
                     }
+                    syncEmbeddingEngine()
                     refresh()
                     _ui.value = _ui.value.copy(
-                        notice = "E2Bをローカルファイル「${result.sourceName}」から読み込みました"
+                        notice = "EmbeddingGemmaを「${result.sourceName}」から読み込みました。既存Memoryは再索引してください。"
                     )
                 } catch (t: Throwable) {
-                    logger.e("MODEL", "E2B local import failed", t)
-                    setError("E2B取り込み失敗: ${t.message}")
+                    logger.e("MODEL", "Embedding local import failed", t)
+                    setError("EmbeddingGemma取り込み失敗: ${t.message}")
                 } finally {
                     _ui.value = _ui.value.copy(
-                        e2bImporting = false,
-                        e2bImportProgress = null,
+                        embeddingImporting = false,
+                        embeddingImportProgress = null,
                         runtimeStatus = "IDLE"
                     )
                 }
@@ -410,22 +487,28 @@ $memoryBlock""".trimIndent()
         runCatching { models.downloadE2B() }.onFailure { setError(it.message ?: "Download failed") }
     }
 
+    fun downloadEmbedding() {
+        runCatching { models.downloadEmbedding() }
+            .onSuccess { _ui.value = _ui.value.copy(notice = "EmbeddingGemma 300M Q4_0（約278MB）のダウンロードを開始しました") }
+            .onFailure { setError(it.message ?: "Download failed") }
+    }
+
     fun deleteE4B() {
-        if (_ui.value.e4bImporting) {
-            setError("E4B取り込み中は削除できません")
-            return
-        }
-        e4b.unload()
-        models.deleteE4B()
-        refresh()
+        if (_ui.value.e4bImporting) { setError("E4B取り込み中は削除できません"); return }
+        e4b.unload(); models.deleteE4B(); refresh()
     }
 
     fun deleteE2B() {
-        if (_ui.value.e2bImporting) {
-            setError("E2B取り込み中は削除できません")
-            return
+        if (_ui.value.e2bImporting) { setError("E2B取り込み中は削除できません"); return }
+        models.deleteE2B(); refresh()
+    }
+
+    fun deleteEmbedding() {
+        if (_ui.value.embeddingImporting || _ui.value.embeddingReindexing) {
+            setError("Embedding処理中は削除できません"); return
         }
-        models.deleteE2B()
+        memory.useHashingEmbedding()
+        models.deleteEmbedding()
         refresh()
     }
 
@@ -436,37 +519,24 @@ $memoryBlock""".trimIndent()
         _ui.value = _ui.value.copy(contextSize = safe)
     }
 
-    fun clearMessagesNotice() {
-        _ui.value = _ui.value.copy(error = null, notice = null)
-    }
-
-    private fun setError(value: String) {
-        _ui.value = _ui.value.copy(error = value)
-    }
+    fun clearMessagesNotice() { _ui.value = _ui.value.copy(error = null, notice = null) }
+    private fun setError(value: String) { _ui.value = _ui.value.copy(error = value) }
 
     fun checkUpdate() {
         viewModelScope.launch {
             val info = updater.check()
-            _ui.value = _ui.value.copy(
-                updateInfo = info,
-                notice = if (info == null) "最新版です" else "更新 ${info.versionName} があります"
-            )
+            _ui.value = _ui.value.copy(updateInfo = info, notice = if (info == null) "最新版です" else "更新 ${info.versionName} があります")
         }
     }
 
     fun downloadUpdate() {
         _ui.value.updateInfo?.let {
             updater.download(it)
-            _ui.value = _ui.value.copy(
-                notice = "APKをダウンロードしています。完了後に「インストール」を押してください"
-            )
+            _ui.value = _ui.value.copy(notice = "APKをダウンロードしています。完了後に「インストール」を押してください")
         }
     }
 
-    fun installUpdate() {
-        if (!updater.installDownloaded()) setError("更新APKがまだ見つかりません")
-    }
-
+    fun installUpdate() { if (!updater.installDownloaded()) setError("更新APKがまだ見つかりません") }
     fun exportLog(): File = logger.exportFile()
     fun createBackup(): File = backup.createBackup()
     fun restoreBackup(file: File): Boolean = backup.restoreFrom(file)
@@ -475,6 +545,7 @@ $memoryBlock""".trimIndent()
         memoryIdleJob?.cancel()
         generationJob?.cancel()
         e4b.close()
+        memory.close()
         db.close()
         super.onCleared()
     }
@@ -484,6 +555,7 @@ $memoryBlock""".trimIndent()
         private const val KEY_RUNTIME_PROFILE_VERSION = "runtime_profile_version"
         private const val KEY_CURRENT_CHAT_ID = "current_chat_id"
         private const val RUNTIME_PROFILE_VERSION = 3
+        private const val EMBEDDING_ENGINE_NAME = "EmbeddingGemma-300M-Q4_0"
 
         fun factory(app: Application): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
