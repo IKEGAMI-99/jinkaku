@@ -19,13 +19,19 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.ikegami99.jinkaku.JinkakuViewModel
 import com.ikegami99.jinkaku.ai.InferenceTelemetry
 import com.ikegami99.jinkaku.ai.InferenceTelemetryState
+import com.ikegami99.jinkaku.data.MemoryRecord
 import com.ikegami99.jinkaku.data.ROLE_USER
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+private enum class MainScreen { CHAT, SETTINGS, MEMORY }
 
 @Composable
 fun JinkakuApp(vm: JinkakuViewModel) {
     val ui by vm.ui.collectAsStateWithLifecycle()
-    var settings by remember { mutableStateOf(false) }
+    var screen by remember { mutableStateOf(MainScreen.CHAT) }
     val snackbar = remember { SnackbarHostState() }
     val context = androidx.compose.ui.platform.LocalContext.current
     val drawerState = rememberDrawerState(DrawerValue.Closed)
@@ -46,12 +52,28 @@ fun JinkakuApp(vm: JinkakuViewModel) {
                 ModalDrawerSheet {
                     Column(Modifier.fillMaxHeight().widthIn(max = 340.dp).statusBarsPadding()) {
                         Text(
-                            "Chat履歴",
+                            "Jinkaku",
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(20.dp, 18.dp, 20.dp, 12.dp)
+                            modifier = Modifier.padding(20.dp, 18.dp, 20.dp, 8.dp)
                         )
-                        HorizontalDivider()
+                        NavigationDrawerItem(
+                            selected = screen == MainScreen.MEMORY,
+                            onClick = {
+                                screen = MainScreen.MEMORY
+                                vm.refresh()
+                                scope.launch { drawerState.close() }
+                            },
+                            label = { Text("🧠 Memory  ${ui.memoryCount}件") },
+                            modifier = Modifier.padding(horizontal = 10.dp)
+                        )
+                        HorizontalDivider(Modifier.padding(vertical = 8.dp))
+                        Text(
+                            "Chat履歴",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
+                        )
                         LazyColumn(
                             Modifier.fillMaxSize(),
                             contentPadding = PaddingValues(10.dp),
@@ -59,18 +81,14 @@ fun JinkakuApp(vm: JinkakuViewModel) {
                         ) {
                             items(ui.chats, key = { it.id }) { chat ->
                                 NavigationDrawerItem(
-                                    selected = chat.id == ui.currentChatId,
+                                    selected = screen == MainScreen.CHAT && chat.id == ui.currentChatId,
                                     onClick = {
-                                        settings = false
+                                        screen = MainScreen.CHAT
                                         vm.selectChat(chat.id)
                                         scope.launch { drawerState.close() }
                                     },
                                     label = {
-                                        Text(
-                                            chat.title,
-                                            maxLines = 2,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
+                                        Text(chat.title, maxLines = 2, overflow = TextOverflow.Ellipsis)
                                     }
                                 )
                             }
@@ -97,19 +115,23 @@ fun JinkakuApp(vm: JinkakuViewModel) {
                                 Text("Jinkaku", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                                 Text("${ui.runtimeStatus}  •  Memory ${ui.memoryCount}", style = MaterialTheme.typography.labelMedium)
                             }
-                            TextButton(onClick = {
-                                settings = false
-                                vm.newChat()
-                            }) { Text("New chat") }
-                            TextButton(onClick = { settings = !settings }) {
-                                Text(if (settings) "チャット" else "設定")
+                            if (screen == MainScreen.CHAT) {
+                                TextButton(onClick = {
+                                    vm.newChat()
+                                }) { Text("New chat") }
+                                TextButton(onClick = { screen = MainScreen.SETTINGS }) { Text("設定") }
+                            } else {
+                                TextButton(onClick = { screen = MainScreen.CHAT }) { Text("チャット") }
+                                if (screen != MainScreen.SETTINGS) {
+                                    TextButton(onClick = { screen = MainScreen.SETTINGS }) { Text("設定") }
+                                }
                             }
                         }
                     }
                 }
             ) { padding ->
-                if (settings) {
-                    SettingsScreen(vm, Modifier.padding(padding)) { file, mime ->
+                when (screen) {
+                    MainScreen.SETTINGS -> SettingsScreen(vm, Modifier.padding(padding)) { file, mime ->
                         val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", file)
                         context.startActivity(
                             Intent.createChooser(
@@ -122,8 +144,8 @@ fun JinkakuApp(vm: JinkakuViewModel) {
                             )
                         )
                     }
-                } else {
-                    ChatScreen(vm, Modifier.padding(padding))
+                    MainScreen.MEMORY -> MemoryScreen(vm, Modifier.padding(padding))
+                    MainScreen.CHAT -> ChatScreen(vm, Modifier.padding(padding))
                 }
             }
         }
@@ -136,7 +158,9 @@ private fun ChatScreen(vm: JinkakuViewModel, modifier: Modifier = Modifier) {
     val telemetry by InferenceTelemetry.state.collectAsStateWithLifecycle()
     var input by remember { mutableStateOf("") }
 
-    Column(modifier.fillMaxSize().imePadding()) {
+    // Do not add imePadding here. The activity uses adjustResize, so adding the
+    // full IME inset again pushes the composer upward by roughly one keyboard height.
+    Column(modifier.fillMaxSize()) {
         ContextMeter(telemetry = telemetry, configuredContext = ui.contextSize.toInt())
 
         LazyColumn(
@@ -159,15 +183,10 @@ private fun ChatScreen(vm: JinkakuViewModel, modifier: Modifier = Modifier) {
                         }
                     }
                     if (
-                        m.role != ROLE_USER &&
-                        telemetry.phase == "DONE" &&
-                        telemetry.finalTextHash != null &&
-                        telemetry.finalTextHash == m.content.hashCode()
+                        m.role != ROLE_USER && telemetry.phase == "DONE" &&
+                        telemetry.finalTextHash != null && telemetry.finalTextHash == m.content.hashCode()
                     ) {
-                        InferenceStatsLine(
-                            telemetry,
-                            Modifier.padding(start = 8.dp, top = 4.dp)
-                        )
+                        InferenceStatsLine(telemetry, Modifier.padding(start = 8.dp, top = 4.dp))
                     }
                 }
             }
@@ -183,17 +202,17 @@ private fun ChatScreen(vm: JinkakuViewModel, modifier: Modifier = Modifier) {
                                 if (ui.generatingText.isNotBlank()) Text(ui.generatingText)
                             }
                         }
-                        InferenceStatsLine(
-                            telemetry,
-                            Modifier.padding(start = 8.dp, top = 4.dp)
-                        )
+                        InferenceStatsLine(telemetry, Modifier.padding(start = 8.dp, top = 4.dp))
                     }
                 }
             }
         }
 
         HorizontalDivider()
-        Row(Modifier.fillMaxWidth().padding(10.dp), verticalAlignment = Alignment.Bottom) {
+        Row(
+            Modifier.fillMaxWidth().navigationBarsPadding().padding(10.dp),
+            verticalAlignment = Alignment.Bottom
+        ) {
             OutlinedTextField(
                 value = input,
                 onValueChange = { input = it },
@@ -211,7 +230,9 @@ private fun ChatScreen(vm: JinkakuViewModel, modifier: Modifier = Modifier) {
                         input = ""
                         vm.send(t)
                     },
-                    enabled = input.isNotBlank() && !ui.e4bImporting && !ui.e2bImporting
+                    enabled = input.isNotBlank() &&
+                        !ui.e4bImporting && !ui.e2bImporting &&
+                        !ui.embeddingImporting && !ui.embeddingReindexing
                 ) { Text("送信") }
             }
         }
@@ -231,18 +252,11 @@ private fun ContextMeter(telemetry: InferenceTelemetryState, configuredContext: 
             verticalArrangement = Arrangement.spacedBy(5.dp)
         ) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    "Context $used / $max",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.SemiBold
-                )
+                Text("Context $used / $max", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.weight(1f))
                 Text("残り $remaining tok", style = MaterialTheme.typography.labelSmall)
             }
-            LinearProgressIndicator(
-                progress = { fraction.coerceIn(0f, 1f) },
-                modifier = Modifier.fillMaxWidth()
-            )
+            LinearProgressIndicator(progress = { fraction.coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
         }
     }
 }
@@ -266,18 +280,79 @@ private fun InferenceStatsLine(telemetry: InferenceTelemetryState, modifier: Mod
 }
 
 @Composable
+private fun MemoryScreen(vm: JinkakuViewModel, modifier: Modifier = Modifier) {
+    val ui by vm.ui.collectAsStateWithLifecycle()
+    Column(modifier.fillMaxSize()) {
+        Surface(tonalElevation = 1.dp) {
+            Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Long-term Memory", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                        Text("${ui.memoryCount}件 • ${ui.embeddingEngineName}", style = MaterialTheme.typography.bodySmall)
+                    }
+                    OutlinedButton(onClick = vm::refresh) { Text("更新") }
+                }
+                if (ui.embeddingReindexing) {
+                    LinearProgressIndicator(
+                        progress = { (ui.embeddingReindexProgress ?: 0f).coerceIn(0f, 1f) },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Text("Embeddingを再索引中… ${((ui.embeddingReindexProgress ?: 0f) * 100).toInt()}%", style = MaterialTheme.typography.labelSmall)
+                }
+            }
+        }
+        if (ui.memories.isEmpty()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("まだ長期Memoryはありません")
+            }
+        } else {
+            LazyColumn(
+                Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                items(ui.memories, key = { it.id }) { memory -> MemoryCard(memory) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MemoryCard(memory: MemoryRecord) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(memory.type, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.weight(1f))
+                Text("#${memory.id}", style = MaterialTheme.typography.labelSmall)
+            }
+            Text(memory.content)
+            Text(
+                "importance ${memory.importance}/3  •  confidence ${memory.confidence}/2  •  ${memory.origin}",
+                style = MaterialTheme.typography.labelSmall
+            )
+            Text(
+                "index ${memory.embedding.size}d  •  access ${memory.accessCount}  •  ${formatMemoryDate(memory.createdAt)}",
+                style = MaterialTheme.typography.labelSmall
+            )
+            if (memory.tags.isNotBlank()) Text("tags: ${memory.tags}", style = MaterialTheme.typography.labelSmall)
+        }
+    }
+}
+
+private fun formatMemoryDate(timestamp: Long): String =
+    SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.getDefault()).format(Date(timestamp))
+
+@Composable
 private fun SettingsScreen(
     vm: JinkakuViewModel,
     modifier: Modifier = Modifier,
     share: (java.io.File, String) -> Unit
 ) {
     val ui by vm.ui.collectAsStateWithLifecycle()
-    val e4bPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) vm.importE4B(uri)
-    }
-    val e2bPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) vm.importE2B(uri)
-    }
+    val e4bPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) vm.importE4B(uri) }
+    val e2bPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) vm.importE2B(uri) }
+    val embeddingPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) vm.importEmbedding(uri) }
 
     LazyColumn(
         modifier.fillMaxSize(),
@@ -310,8 +385,20 @@ private fun SettingsScreen(
             )
         }
         item {
+            ModelCard(
+                name = "EmbeddingGemma 300M Q4_0 (GGUF / 約278MB)",
+                installed = ui.embeddingInstalled,
+                downloadProgress = ui.embeddingDownload?.progress,
+                importing = ui.embeddingImporting,
+                importProgress = ui.embeddingImportProgress,
+                download = vm::downloadEmbedding,
+                importLocal = { embeddingPicker.launch(arrayOf("*/*")) },
+                delete = vm::deleteEmbedding
+            )
+        }
+        item {
             Text(
-                "ローカルファイルはAndroidのファイル選択画面から選べます。選択したモデルはアプリ専用領域へ安全にコピーしてから使用します。E4BはGGUFヘッダを検証します。取り込み中は元ファイルとコピーの両方が存在するため、モデル容量ぶんの追加空き容量が必要です。",
+                "EmbeddingGemmaはMemory検索専用です。未導入時はHashing-256へ自動フォールバックします。GGUFはアプリ専用領域へコピーしてから使用します。",
                 style = MaterialTheme.typography.bodySmall
             )
         }
@@ -337,13 +424,24 @@ private fun SettingsScreen(
         }
         item {
             Text("長期メモリ", fontWeight = FontWeight.Bold)
-            Text("Active: ${ui.memoryCount}件。E2Bは会話中には常駐せず、アイドル時に整理します。")
-            Button(
-                onClick = vm::runMemoryMaintenance,
-                enabled = ui.e2bInstalled && !ui.busy && !ui.e4bImporting && !ui.e2bImporting
-            ) {
-                Text("今すぐ記憶を整理")
+            Text("Active: ${ui.memoryCount}件 • Index: ${ui.embeddingEngineName}")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = vm::runMemoryMaintenance,
+                    enabled = ui.e2bInstalled && !ui.busy && !ui.embeddingReindexing
+                ) { Text("今すぐ記憶を整理") }
+                OutlinedButton(
+                    onClick = vm::reindexMemories,
+                    enabled = ui.embeddingInstalled && !ui.busy && !ui.embeddingImporting
+                ) { Text("Memory再索引") }
             }
+            if (ui.embeddingReindexing) {
+                LinearProgressIndicator(
+                    progress = { (ui.embeddingReindexProgress ?: 0f).coerceIn(0f, 1f) },
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+                )
+            }
+            Text("既存の256d Memoryは再索引するとEmbeddingGemmaの768dへ置き換わります。Memory本文は削除されません。", style = MaterialTheme.typography.bodySmall)
         }
         item {
             Text("メンテナンス", fontWeight = FontWeight.Bold)
@@ -360,13 +458,6 @@ private fun SettingsScreen(
                 if (ui.updateInfo != null) Button(onClick = vm::downloadUpdate) { Text("APK取得") }
                 OutlinedButton(onClick = vm::installUpdate) { Text("インストール") }
             }
-        }
-        item {
-            Text("Embedding", fontWeight = FontWeight.Bold)
-            Text(
-                "MVPでは256次元の完全ローカルHashing Embedding + 固有名詞検索を使用。EmbeddingGemma 300MはHugging Faceの利用同意が必要なため、次段階で差し替え可能な構造にしています。",
-                style = MaterialTheme.typography.bodySmall
-            )
         }
         item { Spacer(Modifier.height(32.dp)) }
     }
@@ -386,19 +477,14 @@ private fun ModelCard(
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(name, fontWeight = FontWeight.SemiBold)
-            Text(
-                when {
-                    importing -> "ローカルファイルを取り込み中"
-                    installed -> "インストール済み"
-                    else -> "未インストール"
-                }
-            )
+            Text(when {
+                importing -> "ローカルファイルを取り込み中"
+                installed -> "インストール済み"
+                else -> "未インストール"
+            })
             if (importing) {
                 if (importProgress != null && importProgress > 0f) {
-                    LinearProgressIndicator(
-                        progress = { importProgress.coerceIn(0f, 1f) },
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                    LinearProgressIndicator(progress = { importProgress.coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
                     Text("${(importProgress * 100).toInt()}%", style = MaterialTheme.typography.labelSmall)
                 } else {
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
