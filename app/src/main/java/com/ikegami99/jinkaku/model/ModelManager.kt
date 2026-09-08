@@ -4,14 +4,16 @@ import android.app.DownloadManager
 import android.content.Context
 import android.net.Uri
 import android.os.Environment
+import android.provider.OpenableColumns
 import com.ikegami99.jinkaku.logging.AppLogger
 import java.io.File
 import java.io.FileInputStream
+import java.io.FileOutputStream
 import java.security.MessageDigest
 
 class ModelManager(private val context: Context, private val logger: AppLogger) {
     private val prefs = context.getSharedPreferences("model_downloads", Context.MODE_PRIVATE)
-    private val root = File(context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "models").apply { mkdirs() }
+    private val root = File(context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: context.filesDir, "models").apply { mkdirs() }
     val e4bFile = File(root, E4B_FILE)
     val e2bFile = File(root, E2B_FILE)
 
@@ -39,6 +41,94 @@ class ModelManager(private val context: Context, private val logger: AppLogger) 
         return id
     }
 
+    fun importE4B(uri: Uri, onProgress: (Float?) -> Unit = {}): ImportResult =
+        importFromUri(uri, e4bFile, ModelType.E4B_GGUF, onProgress)
+
+    fun importE2B(uri: Uri, onProgress: (Float?) -> Unit = {}): ImportResult =
+        importFromUri(uri, e2bFile, ModelType.E2B_LITERT, onProgress)
+
+    private fun importFromUri(uri: Uri, target: File, type: ModelType, onProgress: (Float?) -> Unit): ImportResult {
+        val resolver = context.contentResolver
+        val sourceName = queryDisplayName(uri) ?: "selected model"
+        val sourceSize = querySize(uri)
+        val required = if (sourceSize > 0) sourceSize + IMPORT_HEADROOM_BYTES else IMPORT_HEADROOM_BYTES
+        if (root.usableSpace < required) {
+            throw IllegalStateException("空き容量不足です。取り込みには約${formatBytes(required)}の空きが必要です。既存モデルを残したまま安全にコピーするため、一時的に追加容量を使います。")
+        }
+
+        val temp = File(root, target.name + ".importing")
+        if (temp.exists()) temp.delete()
+        logger.i("MODEL", "Local import start type=$type source=$sourceName size=$sourceSize")
+
+        var copied = 0L
+        var lastReport = 0L
+        try {
+            val input = resolver.openInputStream(uri) ?: throw IllegalArgumentException("選択したファイルを開けません")
+            input.use { src ->
+                FileOutputStream(temp).use { out ->
+                    val buffer = ByteArray(COPY_BUFFER_BYTES)
+                    while (true) {
+                        val count = src.read(buffer)
+                        if (count < 0) break
+                        if (count == 0) continue
+                        out.write(buffer, 0, count)
+                        copied += count
+                        if (copied - lastReport >= PROGRESS_REPORT_BYTES) {
+                            onProgress(if (sourceSize > 0) (copied.toDouble() / sourceSize).toFloat().coerceIn(0f, 1f) else null)
+                            lastReport = copied
+                        }
+                    }
+                    out.flush()
+                    out.fd.sync()
+                }
+            }
+            if (sourceSize > 0 && copied != sourceSize) {
+                throw IllegalStateException("コピーサイズが一致しません: expected=$sourceSize actual=$copied")
+            }
+            validateImported(temp, type)
+
+            if (target.exists() && !target.delete()) throw IllegalStateException("既存モデルを置き換えられません")
+            if (!temp.renameTo(target)) throw IllegalStateException("モデルファイルを確定できません")
+            onProgress(1f)
+            logger.i("MODEL", "Local import complete type=$type source=$sourceName bytes=$copied target=${target.absolutePath}")
+            return ImportResult(sourceName, copied)
+        } catch (t: Throwable) {
+            temp.delete()
+            logger.e("MODEL", "Local import failed type=$type source=$sourceName copied=$copied", t)
+            throw t
+        }
+    }
+
+    private fun validateImported(file: File, type: ModelType) {
+        if (!file.exists() || file.length() <= 0L) throw IllegalArgumentException("選択したファイルが空です")
+        when (type) {
+            ModelType.E4B_GGUF -> {
+                if (file.length() < 100L * 1024L * 1024L) throw IllegalArgumentException("GGUFとして小さすぎるファイルです")
+                val magic = FileInputStream(file).use { String(it.readNBytes(4), Charsets.US_ASCII) }
+                if (magic != "GGUF") throw IllegalArgumentException("GGUFファイルではありません (header=$magic)")
+            }
+            ModelType.E2B_LITERT -> {
+                if (file.length() < 1_000_000_000L) throw IllegalArgumentException("Gemma 4 E2B LiteRT-LMとして小さすぎるファイルです")
+            }
+        }
+    }
+
+    private fun queryDisplayName(uri: Uri): String? = runCatching {
+        context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+            if (!cursor.moveToFirst()) return@use null
+            val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+            if (index >= 0) cursor.getString(index) else null
+        }
+    }.getOrNull()
+
+    private fun querySize(uri: Uri): Long = runCatching {
+        context.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { cursor ->
+            if (!cursor.moveToFirst()) return@use -1L
+            val index = cursor.getColumnIndex(OpenableColumns.SIZE)
+            if (index >= 0 && !cursor.isNull(index)) cursor.getLong(index) else -1L
+        } ?: -1L
+    }.getOrDefault(-1L)
+
     fun status(key: String): DownloadStatus? {
         val id = prefs.getLong(key, -1L)
         if (id < 0) return null
@@ -54,8 +144,8 @@ class ModelManager(private val context: Context, private val logger: AppLogger) 
         }
     }
 
-    fun deleteE4B() { e4bFile.delete(); logger.i("MODEL", "E4B deleted") }
-    fun deleteE2B() { e2bFile.delete(); logger.i("MODEL", "E2B deleted") }
+    fun deleteE4B() { e4bFile.delete(); File(root, e4bFile.name + ".importing").delete(); logger.i("MODEL", "E4B deleted") }
+    fun deleteE2B() { e2bFile.delete(); File(root, e2bFile.name + ".importing").delete(); logger.i("MODEL", "E2B deleted") }
 
     fun verifyE2BSha256(): Boolean {
         if (!isE2BInstalled()) return false
@@ -73,7 +163,16 @@ class ModelManager(private val context: Context, private val logger: AppLogger) 
         return hex.equals(E2B_SHA256, true)
     }
 
+    private fun formatBytes(bytes: Long): String = when {
+        bytes >= 1024L * 1024L * 1024L -> "%.1f GB".format(bytes.toDouble() / (1024L * 1024L * 1024L))
+        bytes >= 1024L * 1024L -> "%.1f MB".format(bytes.toDouble() / (1024L * 1024L))
+        else -> "$bytes bytes"
+    }
+
     companion object {
+        private const val COPY_BUFFER_BYTES = 4 * 1024 * 1024
+        private const val PROGRESS_REPORT_BYTES = 32L * 1024L * 1024L
+        private const val IMPORT_HEADROOM_BYTES = 256L * 1024L * 1024L
         const val E4B_FILE = "Gemma-4-E4B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf"
         const val E2B_FILE = "gemma-4-E2B-it.litertlm"
         const val E4B_URL = "https://huggingface.co/HauhauCS/Gemma-4-E4B-Uncensored-HauhauCS-Aggressive/resolve/main/Gemma-4-E4B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf?download=true"
@@ -82,6 +181,8 @@ class ModelManager(private val context: Context, private val logger: AppLogger) 
     }
 }
 
+private enum class ModelType { E4B_GGUF, E2B_LITERT }
+data class ImportResult(val sourceName: String, val bytes: Long)
 data class DownloadStatus(val status: Int, val downloaded: Long, val total: Long, val reason: Int) {
     val progress: Float get() = if (total > 0) (downloaded.toDouble() / total).toFloat().coerceIn(0f, 1f) else 0f
 }
