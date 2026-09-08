@@ -2,19 +2,24 @@ package com.ikegami99.jinkaku.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Card
+import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.ExpandLess
+import androidx.compose.material.icons.rounded.ExpandMore
+import androidx.compose.material.icons.rounded.LocalOffer
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -70,53 +75,91 @@ fun MemoryTypeGuide(modifier: Modifier = Modifier) {
 
     Column(
         modifier = modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        OutlinedButton(
+        Surface(
             onClick = { expanded = !expanded },
-            modifier = Modifier.fillMaxWidth()
+            shape = MaterialTheme.shapes.large,
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
         ) {
-            Text(if (expanded) "Memory種別と入力例を閉じる ▲" else "Memory種別と入力例を見る ▼")
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Memory種別と入力例", fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "PERSONA / USER / EPISODIC / PREFERENCE / PROJECT / SELF / RELATIONSHIP",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Icon(
+                    imageVector = if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+                    contentDescription = null
+                )
+            }
         }
 
         if (expanded) {
             Text(
-                "どの種類に入れるか迷った時の目安です。意味が近いものを選べば十分です。",
-                style = MaterialTheme.typography.bodySmall
+                "どの種類に入れるか迷った時の目安です。意味が近いものを選べば十分です。7種類すべて表示しています。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 4.dp)
             )
 
             memoryGuideItems.forEach { item ->
-                Card(Modifier.fillMaxWidth()) {
+                Surface(
+                    shape = MaterialTheme.shapes.medium,
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.52f)
+                ) {
                     Column(
-                        Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-                        verticalArrangement = Arrangement.spacedBy(3.dp)
+                        Modifier.fillMaxWidth().padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(5.dp)
                     ) {
-                        Text("${item.key}（${item.japanese}）", fontWeight = FontWeight.SemiBold)
-                        Text(item.meaning, style = MaterialTheme.typography.bodySmall)
-                        Text("入力例: ${item.example}", style = MaterialTheme.typography.labelSmall)
+                        Text("${item.key}  ·  ${item.japanese}", fontWeight = FontWeight.SemiBold)
+                        Text(
+                            item.meaning,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            "入力例  ${item.example}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
                     }
                 }
             }
 
-            Card(Modifier.fillMaxWidth()) {
-                Column(
-                    Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
+            Surface(
+                shape = MaterialTheme.shapes.medium,
+                color = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.55f)
+            ) {
+                Row(
+                    Modifier.fillMaxWidth().padding(14.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.Top
                 ) {
-                    Text("タグについて", fontWeight = FontWeight.SemiBold)
-                    Text(
-                        "タグはMemoryを後から見つけやすくする補助キーワードです。必須ではありません。複数付ける場合はカンマで区切ります。",
-                        style = MaterialTheme.typography.bodySmall
+                    Icon(
+                        Icons.Rounded.LocalOffer,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp),
+                        tint = MaterialTheme.colorScheme.tertiary
                     )
-                    Spacer(Modifier.height(1.dp))
-                    Text(
-                        "例: local-ai, jinkaku, android, speed",
-                        style = MaterialTheme.typography.labelSmall
-                    )
-                    Text(
-                        "本文と同じ言葉を無理に繰り返す必要はありません。プロジェクト名、端末名、人物名、用途などを付けると検索補助になります。",
-                        style = MaterialTheme.typography.labelSmall
-                    )
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("タグについて", fontWeight = FontWeight.SemiBold)
+                        Text(
+                            "タグはMemoryを後から検索・分類しやすくする補助キーワードです。必須ではありません。プロジェクト名、端末名、人物名、用途などをカンマ区切りで付けます。",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        Text(
+                            "例  jinkaku, android, local-ai, speed",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.tertiary
+                        )
+                    }
                 }
             }
         }
