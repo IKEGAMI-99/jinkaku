@@ -12,11 +12,13 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.ikegami99.jinkaku.JinkakuViewModel
 import com.ikegami99.jinkaku.data.ROLE_USER
+import kotlinx.coroutines.launch
 
 @Composable
 fun JinkakuApp(vm: JinkakuViewModel) {
@@ -24,6 +26,9 @@ fun JinkakuApp(vm: JinkakuViewModel) {
     var settings by remember { mutableStateOf(false) }
     val snackbar = remember { SnackbarHostState() }
     val context = androidx.compose.ui.platform.LocalContext.current
+    val drawerState = rememberDrawerState(DrawerValue.Closed)
+    val scope = rememberCoroutineScope()
+
     LaunchedEffect(ui.error, ui.notice) {
         val text = ui.error ?: ui.notice
         if (text != null) {
@@ -31,39 +36,94 @@ fun JinkakuApp(vm: JinkakuViewModel) {
             vm.clearMessagesNotice()
         }
     }
+
     MaterialTheme(colorScheme = lightColorScheme()) {
-        Scaffold(
-            snackbarHost = { SnackbarHost(snackbar) },
-            topBar = {
-                Surface(shadowElevation = 1.dp) {
-                    Row(
-                        Modifier.fillMaxWidth().statusBarsPadding().padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text("Jinkaku", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                            Text("${ui.runtimeStatus}  •  Memory ${ui.memoryCount}", style = MaterialTheme.typography.labelMedium)
+        ModalNavigationDrawer(
+            drawerState = drawerState,
+            drawerContent = {
+                ModalDrawerSheet {
+                    Column(Modifier.fillMaxHeight().widthIn(max = 340.dp).statusBarsPadding()) {
+                        Text(
+                            "Chat履歴",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(20.dp, 18.dp, 20.dp, 12.dp)
+                        )
+                        HorizontalDivider()
+                        LazyColumn(
+                            Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            items(ui.chats, key = { it.id }) { chat ->
+                                NavigationDrawerItem(
+                                    selected = chat.id == ui.currentChatId,
+                                    onClick = {
+                                        settings = false
+                                        vm.selectChat(chat.id)
+                                        scope.launch { drawerState.close() }
+                                    },
+                                    label = {
+                                        Text(
+                                            chat.title,
+                                            maxLines = 2,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                )
+                            }
                         }
-                        TextButton(onClick = { settings = !settings }) { Text(if (settings) "チャット" else "設定") }
                     }
                 }
             }
-        ) { padding ->
-            if (settings) {
-                SettingsScreen(vm, Modifier.padding(padding)) { file, mime ->
-                    val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", file)
-                    context.startActivity(
-                        Intent.createChooser(
-                            Intent(Intent.ACTION_SEND).apply {
-                                type = mime
-                                putExtra(Intent.EXTRA_STREAM, uri)
-                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                            },
-                            "共有"
-                        )
-                    )
+        ) {
+            Scaffold(
+                snackbarHost = { SnackbarHost(snackbar) },
+                topBar = {
+                    Surface(shadowElevation = 1.dp) {
+                        Row(
+                            Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 10.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            TextButton(
+                                onClick = { scope.launch { drawerState.open() } },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Text("☰", style = MaterialTheme.typography.titleLarge)
+                            }
+                            Column(Modifier.weight(1f)) {
+                                Text("Jinkaku", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                                Text("${ui.runtimeStatus}  •  Memory ${ui.memoryCount}", style = MaterialTheme.typography.labelMedium)
+                            }
+                            TextButton(onClick = {
+                                settings = false
+                                vm.newChat()
+                            }) { Text("New chat") }
+                            TextButton(onClick = { settings = !settings }) {
+                                Text(if (settings) "チャット" else "設定")
+                            }
+                        }
+                    }
                 }
-            } else ChatScreen(vm, Modifier.padding(padding))
+            ) { padding ->
+                if (settings) {
+                    SettingsScreen(vm, Modifier.padding(padding)) { file, mime ->
+                        val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", file)
+                        context.startActivity(
+                            Intent.createChooser(
+                                Intent(Intent.ACTION_SEND).apply {
+                                    type = mime
+                                    putExtra(Intent.EXTRA_STREAM, uri)
+                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                },
+                                "共有"
+                            )
+                        )
+                    }
+                } else {
+                    ChatScreen(vm, Modifier.padding(padding))
+                }
+            }
         }
     }
 }
@@ -79,19 +139,26 @@ private fun ChatScreen(vm: JinkakuViewModel, modifier: Modifier = Modifier) {
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             items(ui.messages, key = { it.id }) { m ->
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = if (m.role == ROLE_USER) Arrangement.End else Arrangement.Start) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = if (m.role == ROLE_USER) Arrangement.End else Arrangement.Start
+                ) {
                     Surface(
                         shape = RoundedCornerShape(18.dp),
                         tonalElevation = if (m.role == ROLE_USER) 3.dp else 1.dp,
                         modifier = Modifier.fillMaxWidth(0.88f)
-                    ) { Text(m.content, Modifier.padding(14.dp)) }
+                    ) {
+                        Text(m.content, Modifier.padding(14.dp))
+                    }
                 }
             }
             if (ui.busy && (ui.thinking || ui.generatingText.isNotBlank())) {
                 item {
                     Surface(shape = RoundedCornerShape(18.dp), tonalElevation = 1.dp) {
                         Column(Modifier.padding(14.dp)) {
-                            if (ui.thinking) Text("Thinking…", style = MaterialTheme.typography.labelMedium)
+                            if (ui.thinking && ui.generatingText.isBlank()) {
+                                Text("Thinking…", style = MaterialTheme.typography.labelMedium)
+                            }
                             if (ui.generatingText.isNotBlank()) Text(ui.generatingText)
                         }
                     }
@@ -108,17 +175,28 @@ private fun ChatScreen(vm: JinkakuViewModel, modifier: Modifier = Modifier) {
                 maxLines = 6
             )
             Spacer(Modifier.width(8.dp))
-            if (ui.busy) Button(onClick = vm::stopGeneration) { Text("停止") }
-            else Button(
-                onClick = { val t = input; input = ""; vm.send(t) },
-                enabled = input.isNotBlank() && !ui.e4bImporting && !ui.e2bImporting
-            ) { Text("送信") }
+            if (ui.busy) {
+                Button(onClick = vm::stopGeneration) { Text("停止") }
+            } else {
+                Button(
+                    onClick = {
+                        val t = input
+                        input = ""
+                        vm.send(t)
+                    },
+                    enabled = input.isNotBlank() && !ui.e4bImporting && !ui.e2bImporting
+                ) { Text("送信") }
+            }
         }
     }
 }
 
 @Composable
-private fun SettingsScreen(vm: JinkakuViewModel, modifier: Modifier = Modifier, share: (java.io.File, String) -> Unit) {
+private fun SettingsScreen(
+    vm: JinkakuViewModel,
+    modifier: Modifier = Modifier,
+    share: (java.io.File, String) -> Unit
+) {
     val ui by vm.ui.collectAsStateWithLifecycle()
     val e4bPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) vm.importE4B(uri)
@@ -135,7 +213,7 @@ private fun SettingsScreen(vm: JinkakuViewModel, modifier: Modifier = Modifier, 
         item { Text("モデル", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold) }
         item {
             ModelCard(
-                name = "Gemma 4 E4B HauhauCS Q4_K_M",
+                name = "Gemma 4 E4B HauhauCS (Q2_K_P / local GGUF)",
                 installed = ui.e4bInstalled,
                 downloadProgress = ui.e4bDownload?.progress,
                 importing = ui.e4bImporting,
@@ -166,15 +244,23 @@ private fun SettingsScreen(vm: JinkakuViewModel, modifier: Modifier = Modifier, 
         item {
             Text("Context", fontWeight = FontWeight.Bold)
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                listOf(4096L, 8192L, 16384L, 32768L).forEach { size ->
-                    FilterChip(selected = ui.contextSize == size, onClick = { vm.setContext(size) }, label = { Text("${size / 1024}K") })
+                listOf(1024L, 2048L).forEach { size ->
+                    FilterChip(
+                        selected = ui.contextSize == size,
+                        onClick = { vm.setContext(size) },
+                        label = { Text("${size / 1024}K") }
+                    )
                 }
             }
+            Text("現在はCPU安定性優先で1K/2Kに制限しています。", style = MaterialTheme.typography.bodySmall)
         }
         item {
             Text("長期メモリ", fontWeight = FontWeight.Bold)
             Text("Active: ${ui.memoryCount}件。E2Bは会話中には常駐せず、アイドル時に整理します。")
-            Button(onClick = vm::runMemoryMaintenance, enabled = ui.e2bInstalled && !ui.busy && !ui.e4bImporting && !ui.e2bImporting) {
+            Button(
+                onClick = vm::runMemoryMaintenance,
+                enabled = ui.e2bInstalled && !ui.busy && !ui.e4bImporting && !ui.e2bImporting
+            ) {
                 Text("今すぐ記憶を整理")
             }
         }
@@ -228,7 +314,10 @@ private fun ModelCard(
             )
             if (importing) {
                 if (importProgress != null && importProgress > 0f) {
-                    LinearProgressIndicator(progress = { importProgress.coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
+                    LinearProgressIndicator(
+                        progress = { importProgress.coerceIn(0f, 1f) },
+                        modifier = Modifier.fillMaxWidth()
+                    )
                     Text("${(importProgress * 100).toInt()}%", style = MaterialTheme.typography.labelSmall)
                 } else {
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
