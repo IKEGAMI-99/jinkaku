@@ -44,13 +44,15 @@ class E4BEngine(
     }
 
     private fun ensureLoaded(model: File, requestedContext: Long) {
-        if (loadedPath == model.absolutePath && loadedContext in 1024L..2048L) return
+        if (loadedPath == model.absolutePath && loadedContext in 1024L..8192L) return
 
-        val attempts = linkedSetOf(
-            requestedContext.coerceIn(1024L, 2048L),
-            2048L,
-            1024L
-        )
+        val requested = requestedContext.coerceIn(1024L, 8192L)
+        val attempts = linkedSetOf<Long>()
+        attempts += requested
+        if (requested > 4096L) attempts += 4096L
+        if (requested > 2048L) attempts += 2048L
+        attempts += 1024L
+
         var last: Throwable? = null
         for (ctx in attempts) {
             try {
@@ -63,7 +65,7 @@ class E4BEngine(
             }
         }
         throw IllegalStateException(
-            "E4Bをupstream llama.cppで読み込めませんでした。Q4_K_Mでメモリ不足の場合はQ2_K_Pを試してください。",
+            "E4Bをupstream llama.cppで読み込めませんでした。大きいContextでメモリ不足の場合は4K/2Kへ下げてください。",
             last
         )
     }
