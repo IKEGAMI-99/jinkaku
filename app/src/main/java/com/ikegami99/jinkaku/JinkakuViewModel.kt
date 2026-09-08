@@ -1,18 +1,19 @@
 package com.ikegami99.jinkaku
 
 import android.app.Application
-import android.app.DownloadManager
 import android.content.Context
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.ikegami99.jinkaku.ai.E2BMemoryEngine
 import com.ikegami99.jinkaku.ai.E4BEngine
 import com.ikegami99.jinkaku.ai.GenerationEvent
 import com.ikegami99.jinkaku.ai.MemoryEngine
 import com.ikegami99.jinkaku.backup.BackupManager
+import com.ikegami99.jinkaku.data.ChatMessage
 import com.ikegami99.jinkaku.data.JinkakuDatabase
-import com.ikegami99.jinkaku.data.MessageRow
 import com.ikegami99.jinkaku.data.ROLE_ASSISTANT
 import com.ikegami99.jinkaku.data.ROLE_USER
 import com.ikegami99.jinkaku.logging.AppLogger
@@ -31,15 +32,15 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-
+import java.io.File
 
 data class UiState(
-    val messages: List<MessageRow> = emptyList(),
-    val memories: Int = 0,
-    val runtimeStatus: String = "IDLE",
-    val busy: Boolean = false,
-    val thinking: Boolean = false,
+    val messages: List<ChatMessage> = emptyList(),
     val generatingText: String = "",
+    val thinking: Boolean = false,
+    val busy: Boolean = false,
+    val runtimeStatus: String = "IDLE",
+    val memoryCount: Int = 0,
     val e4bInstalled: Boolean = false,
     val e2bInstalled: Boolean = false,
     val e4bDownload: DownloadStatus? = null,
@@ -56,13 +57,13 @@ data class UiState(
 
 class JinkakuViewModel(app: Application) : AndroidViewModel(app) {
     private val logger: AppLogger = (app as JinkakuApplication).logger
-    private val db = JinkakuDatabase(app, logger)
-    private val memory = MemoryEngine(db)
+    private var db = JinkakuDatabase(app)
+    private var memory = MemoryEngine(db)
     private val models = ModelManager(app, logger)
     private val e4b = E4BEngine(app, viewModelScope, logger)
-    private val e2b = E2BMemoryEngine(app, db, logger)
+    private var e2b = E2BMemoryEngine(app, logger, memory)
     private val updater = AppUpdater(app, logger)
-    private val backup = BackupManager(app, db, logger)
+    private var backup = BackupManager(app, db, logger)
     private val runtimeMutex = Mutex()
     private var generationJob: Job? = null
     private var memoryIdleJob: Job? = null
@@ -82,8 +83,8 @@ class JinkakuViewModel(app: Application) : AndroidViewModel(app) {
         refresh()
         viewModelScope.launch {
             while (true) {
-                delay(1500)
-                refreshDownloadState()
+                delay(1000)
+                refreshDownloads()
             }
         }
     }
@@ -112,28 +113,19 @@ class JinkakuViewModel(app: Application) : AndroidViewModel(app) {
     fun refresh() {
         _ui.value = _ui.value.copy(
             messages = db.recentMessages(100),
-            memories = db.memoryCount(),
+            memoryCount = db.memoryCount(),
             e4bInstalled = models.isE4BInstalled(),
             e2bInstalled = models.isE2BInstalled()
         )
-        refreshDownloadState()
     }
 
-    private fun refreshDownloadState() {
+    private fun refreshDownloads() {
         _ui.value = _ui.value.copy(
             e4bDownload = models.status("e4b"),
-            e2bDownload = models.status("e2b")
+            e2bDownload = models.status("e2b"),
+            e4bInstalled = models.isE4BInstalled(),
+            e2bInstalled = models.isE2BInstalled()
         )
-    }
-
-    fun setContext(value: Long) {
-        prefs.edit().putLong("context", value).apply()
-        _ui.value = _ui.value.copy(contextSize = value)
-        e4b.unload()
-    }
-
-    fun clearMessage() {
-        _ui.value = _ui.value.copy(error = null, notice = null)
     }
 
     fun send(text: String) {
@@ -220,22 +212,19 @@ class JinkakuViewModel(app: Application) : AndroidViewModel(app) {
     private fun scheduleMemoryMaintenance() {
         memoryIdleJob?.cancel()
         memoryIdleJob = viewModelScope.launch {
-            delay(180_000)
+            delay(60_000)
             runMemoryMaintenance()
         }
     }
 
     fun runMemoryMaintenance() {
-        if (_ui.value.busy || !models.isE2BInstalled()) return
+        if (_ui.value.busy || _ui.value.e4bImporting || _ui.value.e2bImporting || !models.isE2BInstalled()) return
         viewModelScope.launch {
             runtimeMutex.withLock {
+                val pending = db.pendingUserMessages(12)
+                if (pending.isEmpty()) return@withLock
                 try {
-                    _ui.value = _ui.value.copy(busy = true, runtimeStatus = "MEMORY MAINTENANCE", error = null)
-                    val pending = db.pendingMessages(24)
-                    if (pending.isEmpty()) {
-                        _ui.value = _ui.value.copy(busy = false, runtimeStatus = "IDLE", notice = "整理する記憶はありません")
-                        return@withLock
-                    }
+                    _ui.value = _ui.value.copy(busy = true, runtimeStatus = "MEMORY MAINTENANCE")
                     e4b.unload()
                     val added = withContext(Dispatchers.IO) { e2b.extract(models.e2bFile, pending) }
                     db.clearPending(pending.map { it.id })
@@ -258,8 +247,8 @@ class JinkakuViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun importE4B(uri: Uri) {
-        if (_ui.value.busy) {
-            setError("推論中はモデルを変更できません")
+        if (_ui.value.busy || _ui.value.e4bImporting || _ui.value.e2bImporting) {
+            setError("別の推論またはモデル処理が実行中です")
             return
         }
         viewModelScope.launch {
@@ -273,7 +262,9 @@ class JinkakuViewModel(app: Application) : AndroidViewModel(app) {
                 try {
                     e4b.unload()
                     val result = withContext(Dispatchers.IO) {
-                        models.importE4B(uri) { p -> _ui.value = _ui.value.copy(e4bImportProgress = p) }
+                        models.importE4B(uri) { progress ->
+                            _ui.value = _ui.value.copy(e4bImportProgress = progress)
+                        }
                     }
                     refresh()
                     _ui.value = _ui.value.copy(
@@ -283,15 +274,19 @@ class JinkakuViewModel(app: Application) : AndroidViewModel(app) {
                     logger.e("MODEL", "E4B local import failed", t)
                     setError("E4B取り込み失敗: ${t.message}")
                 } finally {
-                    _ui.value = _ui.value.copy(e4bImporting = false, e4bImportProgress = null, runtimeStatus = "IDLE")
+                    _ui.value = _ui.value.copy(
+                        e4bImporting = false,
+                        e4bImportProgress = null,
+                        runtimeStatus = "IDLE"
+                    )
                 }
             }
         }
     }
 
     fun importE2B(uri: Uri) {
-        if (_ui.value.busy) {
-            setError("推論中はモデルを変更できません")
+        if (_ui.value.busy || _ui.value.e4bImporting || _ui.value.e2bImporting) {
+            setError("別の推論またはモデル処理が実行中です")
             return
         }
         viewModelScope.launch {
@@ -303,10 +298,10 @@ class JinkakuViewModel(app: Application) : AndroidViewModel(app) {
                     error = null
                 )
                 try {
-                    e4b.unload()
-                    e2b.close()
                     val result = withContext(Dispatchers.IO) {
-                        models.importE2B(uri) { p -> _ui.value = _ui.value.copy(e2bImportProgress = p) }
+                        models.importE2B(uri) { progress ->
+                            _ui.value = _ui.value.copy(e2bImportProgress = progress)
+                        }
                     }
                     refresh()
                     _ui.value = _ui.value.copy(
@@ -316,81 +311,105 @@ class JinkakuViewModel(app: Application) : AndroidViewModel(app) {
                     logger.e("MODEL", "E2B local import failed", t)
                     setError("E2B取り込み失敗: ${t.message}")
                 } finally {
-                    _ui.value = _ui.value.copy(e2bImporting = false, e2bImportProgress = null, runtimeStatus = "IDLE")
+                    _ui.value = _ui.value.copy(
+                        e2bImporting = false,
+                        e2bImportProgress = null,
+                        runtimeStatus = "IDLE"
+                    )
                 }
             }
         }
     }
 
+    private fun buildSystemPrompt(memories: List<String>): String {
+        val persona = db.currentPersona()
+        val memoryBlock = if (memories.isEmpty()) "(none)" else memories.joinToString("\n") { "- $it" }
+        return """You are Jinkaku, a persistent local AI with an evolving but coherent personality. Think carefully before answering. Your hidden reasoning must never be quoted or exposed; output only the final answer to the user. Do not blindly agree. Be consistent with durable memories, while treating them as fallible context. Persona state: $persona
+Relevant long-term memories:
+$memoryBlock
+Current response should be natural and directly answer the user's latest message.""".trimIndent()
+    }
+
+    private fun buildPrompt(history: List<ChatMessage>, current: String): String {
+        val transcript = history.joinToString("\n") {
+            if (it.role == ROLE_USER) "User: ${it.content}" else "Assistant: ${it.content}"
+        }
+        return if (transcript.isBlank()) current else "Recent conversation:\n$transcript\n\nLatest user message:\n$current"
+    }
+
     fun downloadE4B() {
-        e4b.unload()
-        val id = models.downloadE4B()
-        _ui.value = _ui.value.copy(notice = "E4B Q2_K_P（軽量版）のダウンロードを開始しました: $id")
+        runCatching { models.downloadE4B() }
+            .onSuccess { _ui.value = _ui.value.copy(notice = "E4B Q2_K_P（軽量版）のダウンロードを開始しました") }
+            .onFailure { setError(it.message ?: "Download failed") }
     }
 
     fun downloadE2B() {
-        val id = models.downloadE2B()
-        _ui.value = _ui.value.copy(notice = "E2Bのダウンロードを開始しました: $id")
+        runCatching { models.downloadE2B() }.onFailure { setError(it.message ?: "Download failed") }
     }
 
     fun deleteE4B() {
-        if (_ui.value.busy) return
+        if (_ui.value.e4bImporting) {
+            setError("E4B取り込み中は削除できません")
+            return
+        }
         e4b.unload()
         models.deleteE4B()
         refresh()
     }
 
     fun deleteE2B() {
-        if (_ui.value.busy) return
-        e2b.close()
+        if (_ui.value.e2bImporting) {
+            setError("E2B取り込み中は削除できません")
+            return
+        }
         models.deleteE2B()
         refresh()
     }
 
+    fun setContext(value: Long) {
+        prefs.edit().putLong("context", value).apply()
+        _ui.value = _ui.value.copy(contextSize = value)
+    }
+
+    fun clearMessagesNotice() {
+        _ui.value = _ui.value.copy(error = null, notice = null)
+    }
+
+    private fun setError(value: String) {
+        _ui.value = _ui.value.copy(error = value)
+    }
+
     fun checkUpdate() {
         viewModelScope.launch {
-            runCatching { updater.check() }
-                .onSuccess { info -> _ui.value = _ui.value.copy(updateInfo = info, notice = if (info != null) "更新があります: ${info.versionName}" else "最新版です") }
-                .onFailure { setError("更新確認失敗: ${it.message}") }
+            val info = updater.check()
+            _ui.value = _ui.value.copy(
+                updateInfo = info,
+                notice = if (info == null) "最新版です" else "更新 ${info.versionName} があります"
+            )
         }
     }
 
-    fun downloadUpdate(info: UpdateInfo) {
-        runCatching { updater.download(info) }
-            .onSuccess { _ui.value = _ui.value.copy(notice = "更新APKのダウンロードを開始しました") }
-            .onFailure { setError("更新ダウンロード失敗: ${it.message}") }
-    }
-
-    fun exportLog(): Uri = logger.export()
-    fun createBackup(): Uri = backup.create()
-
-    private fun setError(text: String) {
-        _ui.value = _ui.value.copy(error = text, busy = false, thinking = false)
-    }
-
-    private fun buildSystemPrompt(memories: List<String>): String = buildString {
-        appendLine("あなたはSolというローカル人格AIです。落ち着いて知的に話し、盲目的に同意せず、自分の判断を持ってください。")
-        appendLine("内部のthought/reasoningはユーザーに表示せず、最終回答だけを自然な日本語で返してください。")
-        if (memories.isNotEmpty()) {
-            appendLine("関連する長期記憶:")
-            memories.forEach { appendLine("- $it") }
+    fun downloadUpdate() {
+        _ui.value.updateInfo?.let {
+            updater.download(it)
+            _ui.value = _ui.value.copy(
+                notice = "APKをダウンロードしています。完了後に「インストール」を押してください"
+            )
         }
     }
 
-    private fun buildPrompt(history: List<MessageRow>, current: String): String = buildString {
-        history.takeLast(12).forEach { row ->
-            append(if (row.role == ROLE_USER) "User: " else "Assistant: ")
-            appendLine(row.content)
-        }
-        append("User: ")
-        append(current)
+    fun installUpdate() {
+        if (!updater.installDownloaded()) setError("更新APKがまだ見つかりません")
     }
+
+    fun exportLog(): File = logger.exportFile()
+    fun createBackup(): File = backup.createBackup()
+    fun restoreBackup(file: File): Boolean = backup.restoreFrom(file)
 
     override fun onCleared() {
-        generationJob?.cancel()
         memoryIdleJob?.cancel()
+        generationJob?.cancel()
         e4b.close()
-        e2b.close()
         db.close()
         super.onCleared()
     }
@@ -398,6 +417,11 @@ class JinkakuViewModel(app: Application) : AndroidViewModel(app) {
     companion object {
         private const val KEY_E4B_ACTIVE = "e4b_inference_active"
         private const val KEY_RUNTIME_PROFILE_VERSION = "runtime_profile_version"
-        private const val RUNTIME_PROFILE_VERSION = 1
+        private const val RUNTIME_PROFILE_VERSION = 2
+
+        fun factory(app: Application): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
+            @Suppress("UNCHECKED_CAST")
+            override fun <T : ViewModel> create(modelClass: Class<T>): T = JinkakuViewModel(app) as T
+        }
     }
 }
