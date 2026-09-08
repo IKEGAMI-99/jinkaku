@@ -3,6 +3,8 @@ name: Android Release
 on:
   push:
     branches: [ main ]
+  pull_request:
+    branches: [ main ]
   workflow_dispatch:
 
 permissions:
@@ -26,10 +28,12 @@ jobs:
             "build-tools;35.0.0" \
             "ndk;29.0.13113456" \
             "cmake;3.31.6" || true
+      - name: Apply v0.1.22 CPU speed patch
+        run: python3 scripts/patch_cpu_speed_v022.py
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
-      - name: Build CPU-only release APK
+      - name: Build CPU-optimized release APK
         run: gradle --no-daemon :app:assembleRelease
       - name: Prepare release files
         id: prep
@@ -45,6 +49,7 @@ jobs:
           name: jinkaku-apk
           path: jinkaku-v*.apk
       - name: Create or update GitHub Release
+        if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
