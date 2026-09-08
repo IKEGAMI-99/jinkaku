@@ -197,8 +197,35 @@ class JinkakuDatabase(context: Context) : SQLiteOpenHelper(context, "jinkaku.db"
         ids.forEach { writableDatabase.execSQL("UPDATE memories SET last_accessed=?,access_count=access_count+1 WHERE id=?", arrayOf<Any?>(now,it)) }
     }
 
+    fun clearAllMemories(): Int {
+        writableDatabase.beginTransaction()
+        return try {
+            writableDatabase.delete("pending_memory", null, null)
+            val deleted = writableDatabase.delete("memories", null, null)
+            writableDatabase.setTransactionSuccessful()
+            deleted
+        } finally {
+            writableDatabase.endTransaction()
+        }
+    }
+
     fun memoryCount(): Int = readableDatabase.rawQuery("SELECT COUNT(*) FROM memories WHERE status='ACTIVE'",null).use { c -> c.moveToFirst(); c.getInt(0) }
-    fun currentPersona(): String = readableDatabase.rawQuery("SELECT persona_json FROM persona_revisions ORDER BY id DESC LIMIT 1",null).use { c -> if(c.moveToFirst()) c.getString(0) else "{}" }
+
+    fun currentPersona(): String = readableDatabase.rawQuery(
+        "SELECT persona_json FROM persona_revisions ORDER BY id DESC LIMIT 1", null
+    ).use { c -> if(c.moveToFirst()) c.getString(0) else "{}" }
+
+    fun savePersonaRevision(persona: String, note: String = "User edit"): Long {
+        val clean = persona.trim()
+        require(clean.isNotEmpty()) { "Personaを空にはできません" }
+        val v = ContentValues().apply {
+            put("persona_json", clean)
+            put("created_at", System.currentTimeMillis())
+            put("note", note)
+        }
+        return writableDatabase.insertOrThrow("persona_revisions", null, v)
+    }
+
     fun checkpoint() { writableDatabase.rawQuery("PRAGMA wal_checkpoint(FULL)",null).use { while(it.moveToNext()) Unit } }
     fun dbFile() = appContext.getDatabasePath("jinkaku.db")
 
