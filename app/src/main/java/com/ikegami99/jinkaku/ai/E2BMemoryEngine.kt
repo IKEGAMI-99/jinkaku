@@ -16,7 +16,7 @@ class E2BMemoryEngine(private val context:Context,private val logger:AppLogger,p
     suspend fun extract(model:File,messages:List<ChatMessage>):Int{
         if(messages.isEmpty())return 0;require(model.exists()&&model.length()>0){"E2B LiteRT model is not installed"};logger.i("E2B","Memory extraction start count=${messages.size}")
         val config=EngineConfig(modelPath=model.absolutePath,backend=Backend.CPU(),cacheDir=context.cacheDir.absolutePath);var inserted=0
-        Engine(config).use{engine->engine.initialize();val cc=ConversationConfig(systemInstruction=Contents.of(MEMORY_SYSTEM),samplerConfig=SamplerConfig(topK=32,topP=0.9,temperature=0.2));engine.createConversation(cc).use{conversation->messages.forEach{msg->val response=conversation.sendMessage("User message id=${msg.id}:\n${msg.content}\nReturn JSON only.");inserted+=parseAndStore(response.text,msg.id)}}}
+        Engine(config).use{engine->engine.initialize();val cc=ConversationConfig(systemInstruction=Contents.of(MEMORY_SYSTEM),samplerConfig=SamplerConfig(topK=32,topP=0.9,temperature=0.2));engine.createConversation(cc).use{conversation->messages.forEach{msg->val response=conversation.sendMessage("User message id=${msg.id}:\n${msg.content}\nReturn JSON only.");inserted+=parseAndStore(response.toString(),msg.id)}}}
         logger.i("E2B","Memory extraction complete inserted=$inserted");return inserted
     }
     private fun parseAndStore(raw:String,sourceId:Long):Int{
