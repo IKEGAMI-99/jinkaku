@@ -143,7 +143,7 @@ class JinkakuViewModel(app: Application) : AndroidViewModel(app) {
                 .putBoolean(KEY_E4B_ACTIVE, false)
                 .commit()
         }
-        return context.coerceIn(1024L, 2048L)
+        return context.coerceIn(1024L, 8192L)
     }
 
     fun refresh() {
@@ -232,7 +232,7 @@ class JinkakuViewModel(app: Application) : AndroidViewModel(app) {
                         busy = true,
                         thinking = true,
                         generatingText = "",
-                        runtimeStatus = "E4B THINKING",
+                        runtimeStatus = "入力中",
                         error = null
                     )
                     val relevant = withContext(Dispatchers.IO) { memory.retrieve(clean, 10) }
@@ -247,13 +247,13 @@ class JinkakuViewModel(app: Application) : AndroidViewModel(app) {
                         contextSize = _ui.value.contextSize
                     ).collect { event ->
                         when (event) {
-                            GenerationEvent.Thinking -> _ui.value = _ui.value.copy(thinking = true)
+                            GenerationEvent.Thinking -> _ui.value = _ui.value.copy(thinking = true, runtimeStatus = "入力中")
                             is GenerationEvent.Text -> {
                                 finalText += event.value
                                 _ui.value = _ui.value.copy(
                                     thinking = false,
                                     generatingText = finalText,
-                                    runtimeStatus = "E4B GENERATING"
+                                    runtimeStatus = "生成中"
                                 )
                             }
                             is GenerationEvent.Completed -> finalText = event.finalText
@@ -346,6 +346,40 @@ class JinkakuViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
         }
+    }
+
+    fun clearMemories() {
+        if (_ui.value.busy || anyModelImporting()) {
+            setError("処理中はMemoryを削除できません")
+            return
+        }
+        memoryIdleJob?.cancel()
+        val deleted = db.clearAllMemories()
+        refresh()
+        _ui.value = _ui.value.copy(notice = "長期Memoryを${deleted}件削除しました")
+        logger.w("MEMORY", "All long-term memories cleared count=$deleted")
+    }
+
+    fun currentPersona(): String = db.currentPersona()
+
+    fun savePersona(value: String) {
+        if (_ui.value.busy || anyModelImporting()) {
+            setError("処理中はPersonaを変更できません")
+            return
+        }
+        val clean = value.trim()
+        if (clean.isBlank()) {
+            setError("Personaを空にはできません")
+            return
+        }
+        if (clean.length > 12_000) {
+            setError("Personaが長すぎます。12,000文字以内にしてください")
+            return
+        }
+        db.savePersonaRevision(clean)
+        e4b.unload()
+        _ui.value = _ui.value.copy(notice = "Personaを保存しました。次の会話から反映されます")
+        logger.i("PERSONA", "Persona revision saved chars=${clean.length}")
     }
 
     fun reindexMemories() {
@@ -513,7 +547,7 @@ $memoryBlock""".trimIndent()
     }
 
     fun setContext(value: Long) {
-        val safe = value.coerceIn(1024L, 2048L)
+        val safe = value.coerceIn(1024L, 8192L)
         prefs.edit().putLong("context", safe).apply()
         e4b.unload()
         _ui.value = _ui.value.copy(contextSize = safe)
