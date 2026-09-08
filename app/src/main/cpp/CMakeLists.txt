@@ -20,9 +20,11 @@ set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
 set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
 set(GGML_BACKEND_DL OFF CACHE BOOL "" FORCE)
 set(GGML_CPU_ALL_VARIANTS OFF CACHE BOOL "" FORCE)
-# Arm64 Android gets KleidiAI's optimized quantized-matmul kernels. This keeps
-# inference CPU-only while using the Snapdragon's Arm SIMD more effectively.
-set(GGML_CPU_KLEIDIAI ON CACHE BOOL "" FORCE)
+# KleidiAI is deliberately disabled for the Q2_K_P profile. On the target
+# Android device the previous Q4_K_M + KleidiAI build regressed decode speed,
+# so v0.1.23 returns to llama.cpp's standard ARM CPU kernels while retaining
+# the KV-prefix and prompt-batching optimizations.
+set(GGML_CPU_KLEIDIAI OFF CACHE BOOL "" FORCE)
 set(GGML_LLAMAFILE OFF CACHE BOOL "" FORCE)
 
 # CPU-only runtime. GPU backends stay disabled for stability.
