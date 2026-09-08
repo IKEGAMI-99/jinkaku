@@ -2,6 +2,7 @@ package com.ikegami99.jinkaku.ai
 
 import android.app.ActivityManager
 import android.content.Context
+import android.system.Os
 import com.ikegami99.jinkaku.logging.AppLogger
 import io.aatricks.llmedge.text.runtime.SmolLM
 import kotlinx.coroutines.CoroutineScope
@@ -32,7 +33,12 @@ class E4BEngine(
         }
 
         unload()
-        logger.i("E4B", "Creating direct SmolLM CPU runtime; Vulkan is hard-disabled")
+        runCatching { Os.setenv("GGML_DISABLE_VULKAN", "1", true) }
+        runCatching { Os.setenv("GGML_DISABLE_OPENCL", "1", true) }
+        logger.i(
+            "E4B",
+            "Creating direct SmolLM CPU runtime; Vulkan/OpenCL env gates=${System.getenv("GGML_DISABLE_VULKAN")}/${System.getenv("GGML_DISABLE_OPENCL")}"
+        )
         val smol = SmolLM(useVulkan = false)
         try {
             smol.load(
