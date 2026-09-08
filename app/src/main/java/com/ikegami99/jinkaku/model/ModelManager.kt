@@ -17,6 +17,12 @@ class ModelManager(private val context: Context, private val logger: AppLogger) 
     val e4bFile = File(root, E4B_FILE)
     val e2bFile = File(root, E2B_FILE)
 
+    init {
+        listOf(File(root, "$E4B_FILE.importing"), File(root, "$E2B_FILE.importing")).forEach { stale ->
+            if (stale.exists() && stale.delete()) logger.w("MODEL", "Removed stale import file ${stale.name}")
+        }
+    }
+
     fun isE4BInstalled() = e4bFile.exists() && e4bFile.length() > 4L && runCatching {
         FileInputStream(e4bFile).use { String(it.readNBytes(4), Charsets.US_ASCII) == "GGUF" }
     }.getOrDefault(false)
@@ -26,6 +32,7 @@ class ModelManager(private val context: Context, private val logger: AppLogger) 
     fun downloadE2B(): Long = enqueue(E2B_URL, E2B_FILE, "e2b")
 
     private fun enqueue(url: String, filename: String, key: String): Long {
+        cancelActiveDownload(key)
         val target = File(root, filename)
         if (target.exists()) target.delete()
         val request = DownloadManager.Request(Uri.parse(url))
@@ -41,11 +48,31 @@ class ModelManager(private val context: Context, private val logger: AppLogger) 
         return id
     }
 
-    fun importE4B(uri: Uri, onProgress: (Float?) -> Unit = {}): ImportResult =
-        importFromUri(uri, e4bFile, ModelType.E4B_GGUF, onProgress)
+    fun importE4B(uri: Uri, onProgress: (Float?) -> Unit = {}): ImportResult {
+        cancelActiveDownload("e4b")
+        return importFromUri(uri, e4bFile, ModelType.E4B_GGUF, onProgress)
+    }
 
-    fun importE2B(uri: Uri, onProgress: (Float?) -> Unit = {}): ImportResult =
-        importFromUri(uri, e2bFile, ModelType.E2B_LITERT, onProgress)
+    fun importE2B(uri: Uri, onProgress: (Float?) -> Unit = {}): ImportResult {
+        cancelActiveDownload("e2b")
+        return importFromUri(uri, e2bFile, ModelType.E2B_LITERT, onProgress)
+    }
+
+    private fun cancelActiveDownload(key: String) {
+        val id = prefs.getLong(key, -1L)
+        if (id < 0) return
+        val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+        val current = status(key)
+        if (current == null) {
+            prefs.edit().remove(key).apply()
+            return
+        }
+        if (current.status == DownloadManager.STATUS_PENDING || current.status == DownloadManager.STATUS_RUNNING || current.status == DownloadManager.STATUS_PAUSED) {
+            dm.remove(id)
+            prefs.edit().remove(key).apply()
+            logger.w("MODEL", "Cancelled active download key=$key id=$id before replacement")
+        }
+    }
 
     private fun importFromUri(uri: Uri, target: File, type: ModelType, onProgress: (Float?) -> Unit): ImportResult {
         val resolver = context.contentResolver
