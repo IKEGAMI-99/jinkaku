@@ -26,18 +26,13 @@ class E4BEngine(
     private var loadedPath: String? = null
     private var loadedContext: Long = -1L
 
-    private suspend fun ensureLoaded(model: File, contextSize: Long): SmolLM {
-        val existing = runtime
-        if (existing != null && loadedPath == model.absolutePath && loadedContext == contextSize) {
-            return existing
-        }
-
+    private suspend fun tryLoad(model: File, contextSize: Long): SmolLM {
         unload()
         runCatching { Os.setenv("GGML_DISABLE_VULKAN", "1", true) }
         runCatching { Os.setenv("GGML_DISABLE_OPENCL", "1", true) }
         logger.i(
             "E4B",
-            "Creating direct SmolLM CPU runtime; Vulkan/OpenCL env gates=${System.getenv("GGML_DISABLE_VULKAN")}/${System.getenv("GGML_DISABLE_OPENCL")}"
+            "Creating direct SmolLM CPU runtime ctx=$contextSize kv=F16/F16 env=${System.getenv("GGML_DISABLE_VULKAN")}/${System.getenv("GGML_DISABLE_OPENCL")}"
         )
         val smol = SmolLM(useVulkan = false)
         try {
@@ -54,15 +49,15 @@ class E4BEngine(
                     useFlashAttn = false,
                     thinkingMode = SmolLM.ThinkingMode.DEFAULT,
                     reasoningBudget = -1,
-                    kvCacheTypeK = SmolLM.KvCacheType.Q8_KV,
-                    kvCacheTypeV = SmolLM.KvCacheType.Q8_0,
+                    kvCacheTypeK = SmolLM.KvCacheType.F16,
+                    kvCacheTypeV = SmolLM.KvCacheType.F16,
                     nGpuLayers = 0,
-                    nUbatch = 64
+                    nUbatch = 32
                 )
             )
             logger.i(
                 "E4B",
-                "CPU model loaded vulkanEnabled=${smol.isVulkanEnabled()} estimatedNative=${smol.getEstimatedNativeMemoryBytes()} estimatedState=${smol.getEstimatedStateMemoryBytes()}"
+                "CPU model loaded ctx=$contextSize vulkanEnabled=${smol.isVulkanEnabled()} estimatedNative=${smol.getEstimatedNativeMemoryBytes()} estimatedState=${smol.getEstimatedStateMemoryBytes()}"
             )
             runtime = smol
             loadedPath = model.absolutePath
@@ -70,9 +65,33 @@ class E4BEngine(
             return smol
         } catch (t: Throwable) {
             runCatching { smol.close() }
-            logger.e("E4B", "Direct CPU model load failed", t)
+            logger.e("E4B", "CPU load failed ctx=$contextSize", t)
             throw t
         }
+    }
+
+    private suspend fun ensureLoaded(model: File, requestedContext: Long): SmolLM {
+        val existing = runtime
+        if (existing != null && loadedPath == model.absolutePath) return existing
+
+        val attempts = linkedSetOf(
+            requestedContext.coerceIn(1024L, 2048L),
+            2048L,
+            1024L
+        )
+        var last: Throwable? = null
+        for (ctx in attempts) {
+            try {
+                return tryLoad(model, ctx)
+            } catch (t: Throwable) {
+                last = t
+                logger.w("E4B", "Context creation failed at $ctx; trying smaller profile")
+            }
+        }
+        throw IllegalStateException(
+            "E4BをCPUで読み込めませんでした。Q4_K_Mではメモリ不足の可能性があります。モデル管理からQ2_K_P版を使用してください。",
+            last
+        )
     }
 
     fun generate(
@@ -83,19 +102,21 @@ class E4BEngine(
     ): Flow<GenerationEvent> = flow {
         require(model.exists() && model.length() > 0L) { "E4B GGUF model is not installed" }
 
-        val safeContext = contextSize.coerceIn(2048L, 4096L)
         val memoryInfo = ActivityManager.MemoryInfo()
         (context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager).getMemoryInfo(memoryInfo)
         logger.i(
             "E4B",
-            "Generation start CPU_ONLY model=${model.name} size=${model.length()} ctx=$safeContext availMem=${memoryInfo.availMem} lowMemory=${memoryInfo.lowMemory}"
+            "Generation start CPU_ONLY model=${model.name} size=${model.length()} requestedCtx=$contextSize availMem=${memoryInfo.availMem} lowMemory=${memoryInfo.lowMemory}"
         )
 
         if (memoryInfo.lowMemory || memoryInfo.availMem < 3_500_000_000L) {
             throw IllegalStateException("E4B用の空きRAMが不足しています。バックグラウンドアプリを閉じて再試行してください")
         }
+        if (model.length() > memoryInfo.availMem) {
+            logger.w("E4B", "Model file is larger than current available RAM; Q2_K_P is recommended")
+        }
 
-        val smol = ensureLoaded(model, safeContext)
+        val smol = ensureLoaded(model, contextSize)
         smol.clearMessages()
         smol.clearKvCache()
         smol.addSystemPrompt(systemPrompt)
