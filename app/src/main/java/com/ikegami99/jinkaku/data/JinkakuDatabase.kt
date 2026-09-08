@@ -22,7 +22,7 @@ class JinkakuDatabase(context: Context) : SQLiteOpenHelper(context, "jinkaku.db"
         db.execSQL("CREATE TABLE pending_memory(message_id INTEGER PRIMARY KEY,created_at INTEGER NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,FOREIGN KEY(message_id) REFERENCES messages(id) ON DELETE CASCADE)")
         db.execSQL("CREATE TABLE persona_revisions(id INTEGER PRIMARY KEY AUTOINCREMENT,persona_json TEXT NOT NULL,created_at INTEGER NOT NULL,note TEXT NOT NULL DEFAULT '')")
         val initialPersona = """{"name":"Jinkaku","traits":{"curiosity":0.90,"independence":0.80,"sarcasm":0.35,"empathy":0.70}}"""
-        db.execSQL("INSERT INTO persona_revisions(persona_json,created_at,note) VALUES(?,?,?)", arrayOf(initialPersona, System.currentTimeMillis(), "Initial persona"))
+        db.execSQL("INSERT INTO persona_revisions(persona_json,created_at,note) VALUES(?,?,?)", arrayOf<Any?>(initialPersona, System.currentTimeMillis(), "Initial persona"))
     }
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
     fun insertMessage(role: String, content: String, status: String = "COMPLETE"): Long {
@@ -50,7 +50,7 @@ class JinkakuDatabase(context: Context) : SQLiteOpenHelper(context, "jinkaku.db"
         readableDatabase.rawQuery("SELECT id,content,type,importance,confidence,origin,status,embedding,created_at,last_accessed,access_count,tags FROM memories WHERE status='ACTIVE' ORDER BY updated_at DESC LIMIT ?", arrayOf(limit.toString())).use { c -> while(c.moveToNext()) out += MemoryRecord(c.getLong(0),c.getString(1),c.getString(2),c.getInt(3),c.getInt(4),c.getString(5),c.getString(6),blobToFloats(c.getBlob(7)),c.getLong(8),c.getLong(9),c.getInt(10),c.getString(11)) }
         return out
     }
-    fun touchMemories(ids: List<Long>) { val now=System.currentTimeMillis(); ids.forEach { writableDatabase.execSQL("UPDATE memories SET last_accessed=?,access_count=access_count+1 WHERE id=?", arrayOf(now,it)) } }
+    fun touchMemories(ids: List<Long>) { val now=System.currentTimeMillis(); ids.forEach { writableDatabase.execSQL("UPDATE memories SET last_accessed=?,access_count=access_count+1 WHERE id=?", arrayOf<Any?>(now,it)) } }
     fun memoryCount(): Int = readableDatabase.rawQuery("SELECT COUNT(*) FROM memories WHERE status='ACTIVE'",null).use { c -> c.moveToFirst(); c.getInt(0) }
     fun currentPersona(): String = readableDatabase.rawQuery("SELECT persona_json FROM persona_revisions ORDER BY id DESC LIMIT 1",null).use { c -> if(c.moveToFirst()) c.getString(0) else "{}" }
     fun checkpoint() { writableDatabase.rawQuery("PRAGMA wal_checkpoint(FULL)",null).use { while(it.moveToNext()) Unit } }
