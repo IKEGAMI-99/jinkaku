@@ -20,16 +20,19 @@ set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
 set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
 set(GGML_BACKEND_DL OFF CACHE BOOL "" FORCE)
 set(GGML_CPU_ALL_VARIANTS OFF CACHE BOOL "" FORCE)
-# KleidiAI is deliberately disabled for the Q2_K_P profile. On the target
-# Android device the previous Q4_K_M + KleidiAI build regressed decode speed,
-# so v0.1.23 returns to llama.cpp's standard ARM CPU kernels while retaining
-# the KV-prefix and prompt-batching optimizations.
+# Keep the fast/stable standard ARM kernels for CPU decode.
 set(GGML_CPU_KLEIDIAI OFF CACHE BOOL "" FORCE)
 set(GGML_LLAMAFILE OFF CACHE BOOL "" FORCE)
 
-# CPU-only runtime. GPU backends stay disabled for stability.
+# v0.1.25 uses OpenCL only as a temporary long-prompt prefill accelerator.
+# Vulkan stays disabled because the target POCO F7 Ultra previously hit
+# VK_ERROR_DEVICE_LOST. Decode and normal short prefills remain on CPU.
 set(GGML_VULKAN OFF CACHE BOOL "" FORCE)
-set(GGML_OPENCL OFF CACHE BOOL "" FORCE)
+set(GGML_OPENCL ON CACHE BOOL "" FORCE)
+set(GGML_OPENCL_EMBED_KERNELS ON CACHE BOOL "" FORCE)
+set(GGML_OPENCL_USE_ADRENO_KERNELS ON CACHE BOOL "" FORCE)
+set(GGML_OPENCL_USE_ADRENO_BIN_KERNELS OFF CACHE BOOL "" FORCE)
+set(GGML_OPENCL_TARGET_VERSION 300 CACHE STRING "" FORCE)
 
 FetchContent_Declare(
         llama_cpp
