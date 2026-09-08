@@ -11,6 +11,7 @@
 
 #include "llama.h"
 #include "chat.h"
+#include "ggml-backend.h"
 
 #define TAG "JinkakuLlama"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
@@ -35,6 +36,8 @@ int32_t g_max_tokens = 0;
 int32_t g_context_size = 0;
 int64_t g_prefill_us = 0;
 int64_t g_decode_started_us = 0;
+std::string g_backend_label = "CPU";
+int32_t g_gpu_layers = 0;
 
 // Separate EmbeddingGemma runtime. Keeping it separate prevents memory lookup
 // from clearing or otherwise mutating the E4B chat context.
@@ -56,7 +59,27 @@ void ensure_backend_initialized() {
     }, nullptr);
     llama_backend_init();
     g_backend_initialized = true;
-    LOGI("upstream llama.cpp backend initialized");
+    LOGI("upstream llama.cpp backend initialized devices=%zu", ggml_backend_dev_count());
+}
+
+std::string find_opencl_device() {
+    for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+        ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+        if (!dev) continue;
+        const char * nameRaw = ggml_backend_dev_name(dev);
+        const char * descRaw = ggml_backend_dev_description(dev);
+        const std::string name = nameRaw ? nameRaw : "";
+        const std::string desc = descRaw ? descRaw : "";
+        std::string probe = name + " " + desc;
+        std::transform(probe.begin(), probe.end(), probe.begin(), [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
+        LOGI("backend device[%zu] name=%s desc=%s", i, name.c_str(), desc.c_str());
+        if (probe.find("opencl") != std::string::npos || probe.find("adreno") != std::string::npos) {
+            return desc.empty() ? name : desc;
+        }
+    }
+    return {};
 }
 
 void append_utf8(std::string & out, uint32_t cp) {
@@ -126,6 +149,8 @@ void free_model_locked() {
     g_context_size = 0;
     g_prefill_us = 0;
     g_decode_started_us = 0;
+    g_backend_label = "CPU";
+    g_gpu_layers = 0;
 }
 
 void free_embedding_locked() {
@@ -229,7 +254,13 @@ Java_com_ikegami99_jinkaku_ai_UpstreamLlamaBridge_nativeInit(JNIEnv * env, jobje
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_ikegami99_jinkaku_ai_UpstreamLlamaBridge_nativeLoad(JNIEnv * env, jobject, jstring modelPath, jint contextSize) {
+Java_com_ikegami99_jinkaku_ai_UpstreamLlamaBridge_nativeLoad(
+        JNIEnv * env,
+        jobject,
+        jstring modelPath,
+        jint contextSize,
+        jint backendMode,
+        jint gpuLayers) {
     std::lock_guard<std::mutex> lock(g_mutex);
     try {
         ensure_backend_initialized();
@@ -237,8 +268,37 @@ Java_com_ikegami99_jinkaku_ai_UpstreamLlamaBridge_nativeLoad(JNIEnv * env, jobje
         const std::string path = from_jstring(env, modelPath);
         if (path.empty()) return error_string(env, "empty model path");
 
+        const std::string openclDevice = find_opencl_device();
+        const bool hasOpenCl = !openclDevice.empty();
+        int32_t requestedGpuLayers = 0;
+        switch (backendMode) {
+            case 0: // AUTO
+                requestedGpuLayers = hasOpenCl ? std::clamp(static_cast<int32_t>(gpuLayers), 1, 64) : 0;
+                break;
+            case 1: // CPU
+                requestedGpuLayers = 0;
+                break;
+            case 2: // GPU
+                if (!hasOpenCl) return error_string(env, "OpenCL/Adreno GPU backend is not available");
+                requestedGpuLayers = 999;
+                break;
+            case 3: // HYBRID
+                if (!hasOpenCl) return error_string(env, "OpenCL/Adreno GPU backend is not available");
+                requestedGpuLayers = std::clamp(static_cast<int32_t>(gpuLayers), 1, 64);
+                break;
+            default:
+                return error_string(env, "unknown backend mode");
+        }
+
         llama_model_params mparams = llama_model_default_params();
-        mparams.n_gpu_layers = 0;
+        mparams.n_gpu_layers = requestedGpuLayers;
+
+        LOGI(
+            "loading model backendMode=%d opencl=%s gpuLayers=%d",
+            static_cast<int>(backendMode),
+            hasOpenCl ? openclDevice.c_str() : "none",
+            requestedGpuLayers
+        );
 
         g_model = llama_model_load_from_file(path.c_str(), mparams);
         if (!g_model) return error_string(env, "llama_model_load_from_file returned null");
@@ -247,6 +307,15 @@ Java_com_ikegami99_jinkaku_ai_UpstreamLlamaBridge_nativeLoad(JNIEnv * env, jobje
             free_model_locked();
             return error_string(env, "llama_model_get_vocab returned null");
         }
+
+        if (requestedGpuLayers <= 0) {
+            g_backend_label = "CPU";
+        } else if (backendMode == 2) {
+            g_backend_label = "GPU · OpenCL";
+        } else {
+            g_backend_label = "CPU+GPU · OpenCL";
+        }
+        g_gpu_layers = requestedGpuLayers;
 
         const int32_t ctx = std::clamp(static_cast<int32_t>(contextSize), 1024, 8192);
         llama_context_params cparams = llama_context_default_params();
@@ -281,7 +350,12 @@ Java_com_ikegami99_jinkaku_ai_UpstreamLlamaBridge_nativeLoad(JNIEnv * env, jobje
         llama_sampler_chain_add(g_sampler, llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
 
         g_stop.store(false, std::memory_order_relaxed);
-        LOGI("model loaded with upstream llama.cpp ctx=%d threads=6 ubatch=128 backend=CPU", ctx);
+        LOGI(
+            "model loaded with upstream llama.cpp ctx=%d threads=6 ubatch=128 backend=%s gpuLayers=%d",
+            ctx,
+            g_backend_label.c_str(),
+            g_gpu_layers
+        );
         return nullptr;
     } catch (const std::exception & e) {
         free_model_locked();
@@ -360,7 +434,13 @@ Java_com_ikegami99_jinkaku_ai_UpstreamLlamaBridge_nativeBegin(
         g_decode_started_us = now_us();
 
         const double prefill_tps = tokenized * 1000000.0 / static_cast<double>(g_prefill_us);
-        LOGI("generation begun promptTokens=%d maxTokens=%d thinking=true prefill=%.2f tok/s", tokenized, g_max_tokens, prefill_tps);
+        LOGI(
+            "generation begun promptTokens=%d maxTokens=%d thinking=true prefill=%.2f tok/s backend=%s",
+            tokenized,
+            g_max_tokens,
+            prefill_tps,
+            g_backend_label.c_str()
+        );
         return nullptr;
     } catch (const std::exception & e) {
         return error_string(env, std::string("native begin exception: ") + e.what());
@@ -430,6 +510,12 @@ Java_com_ikegami99_jinkaku_ai_UpstreamLlamaBridge_nativeStats(JNIEnv * env, jobj
     if (!result) return nullptr;
     env->SetLongArrayRegion(result, 0, 7, values);
     return result;
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_ikegami99_jinkaku_ai_UpstreamLlamaBridge_nativeBackend(JNIEnv * env, jobject) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return env->NewStringUTF(g_backend_label.c_str());
 }
 
 extern "C" JNIEXPORT void JNICALL
