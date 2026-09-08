@@ -3,6 +3,9 @@ package com.ikegami99.jinkaku.ai
 import android.app.ActivityManager
 import android.content.Context
 import android.system.Os
+import com.ikegami99.jinkaku.data.ChatMessage
+import com.ikegami99.jinkaku.data.ROLE_ASSISTANT
+import com.ikegami99.jinkaku.data.ROLE_USER
 import com.ikegami99.jinkaku.logging.AppLogger
 import io.aatricks.llmedge.text.runtime.SmolLM
 import kotlinx.coroutines.CoroutineScope
@@ -32,7 +35,7 @@ class E4BEngine(
         runCatching { Os.setenv("GGML_DISABLE_OPENCL", "1", true) }
         logger.i(
             "E4B",
-            "Creating direct SmolLM CPU runtime ctx=$contextSize kv=F16/F16 env=${System.getenv("GGML_DISABLE_VULKAN")}/${System.getenv("GGML_DISABLE_OPENCL")}"
+            "Creating direct SmolLM CPU runtime ctx=$contextSize kv=F16/F16 jinja=model-metadata env=${System.getenv("GGML_DISABLE_VULKAN")}/${System.getenv("GGML_DISABLE_OPENCL")}"
         )
         val smol = SmolLM(useVulkan = false)
         try {
@@ -40,8 +43,9 @@ class E4BEngine(
                 model.absolutePath,
                 SmolLM.InferenceParams(
                     temperature = 1.0f,
-                    storeChats = false,
+                    storeChats = true,
                     contextSize = contextSize,
+                    chatTemplate = null,
                     numThreads = 4,
                     generationThreads = 2,
                     useMmap = true,
@@ -96,8 +100,9 @@ class E4BEngine(
 
     fun generate(
         model: File,
-        prompt: String,
+        currentUserMessage: String,
         systemPrompt: String,
+        history: List<ChatMessage>,
         contextSize: Long
     ): Flow<GenerationEvent> = flow {
         require(model.exists() && model.length() > 0L) { "E4B GGUF model is not installed" }
@@ -106,7 +111,7 @@ class E4BEngine(
         (context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager).getMemoryInfo(memoryInfo)
         logger.i(
             "E4B",
-            "Generation start CPU_ONLY model=${model.name} size=${model.length()} requestedCtx=$contextSize availMem=${memoryInfo.availMem} lowMemory=${memoryInfo.lowMemory}"
+            "Generation start CPU_ONLY model=${model.name} size=${model.length()} requestedCtx=$contextSize history=${history.size} availMem=${memoryInfo.availMem} lowMemory=${memoryInfo.lowMemory}"
         )
 
         if (memoryInfo.lowMemory || memoryInfo.availMem < 3_500_000_000L) {
@@ -119,24 +124,38 @@ class E4BEngine(
         val smol = ensureLoaded(model, contextSize)
         smol.clearMessages()
         smol.clearKvCache()
-        smol.addSystemPrompt(systemPrompt)
+
+        val thinkingSystem = if (systemPrompt.trimStart().startsWith("<|think|>")) {
+            systemPrompt
+        } else {
+            "<|think|>\n$systemPrompt"
+        }
+        smol.addSystemPrompt(thinkingSystem)
+        history.forEach { message ->
+            when (message.role) {
+                ROLE_USER -> smol.addUserMessage(message.content)
+                ROLE_ASSISTANT -> smol.addAssistantMessage(message.content)
+            }
+        }
 
         val started = System.currentTimeMillis()
         val filter = ThinkingFilter()
         var final = ""
-        var thinkingSent = false
+        var rawChars = 0
+        var stopRequested = false
 
         emit(GenerationEvent.Thinking)
-        thinkingSent = true
 
-        smol.getResponseAsFlow(prompt, Dispatchers.Default, 1).collect { chunk ->
+        smol.getResponseAsFlow(currentUserMessage, Dispatchers.Default, 1).collect { chunk ->
             if (chunk == "[EOG]") return@collect
+            rawChars += chunk.length
+            if (!stopRequested && rawChars > MAX_RAW_OUTPUT_CHARS) {
+                stopRequested = true
+                logger.w("E4B", "Generation safety cap reached rawChars=$rawChars; stopping completion")
+                runCatching { smol.stopCompletion() }
+            }
             val visible = filter.accept(chunk)
             if (visible.isNotEmpty()) {
-                if (!thinkingSent) {
-                    emit(GenerationEvent.Thinking)
-                    thinkingSent = true
-                }
                 final += visible
                 emit(GenerationEvent.Text(visible))
             }
@@ -148,14 +167,21 @@ class E4BEngine(
             emit(GenerationEvent.Text(tail))
         }
 
+        val cleaned = cleanControlTokens(final).trim()
         val elapsed = System.currentTimeMillis() - started
         val metrics = runCatching { smol.getLastGenerationMetrics() }.getOrNull()
         logger.i(
             "E4B",
-            "Generation complete elapsedMs=$elapsed chars=${final.length} tokens=${metrics?.tokenCount ?: -1} tokS=${metrics?.tokensPerSecond ?: -1f}"
+            "Generation complete elapsedMs=$elapsed visibleChars=${cleaned.length} rawChars=$rawChars thoughtMarker=${filter.sawThinkingMarker} tokens=${metrics?.tokenCount ?: -1} tokS=${metrics?.tokensPerSecond ?: -1f}"
         )
-        emit(GenerationEvent.Completed(final.trim(), elapsed))
+        emit(GenerationEvent.Completed(cleaned, elapsed))
     }
+
+    private fun cleanControlTokens(value: String): String = value
+        .replace("<|channel>final", "")
+        .replace("<|turn>model", "")
+        .replace("<turn|>", "")
+        .replace("<|eot_id|>", "")
 
     fun unload() {
         val old = runtime
@@ -169,13 +195,29 @@ class E4BEngine(
     }
 
     override fun close() = unload()
+
+    companion object {
+        private const val MAX_RAW_OUTPUT_CHARS = 16_000
+    }
 }
 
 private class ThinkingFilter {
     private var inThinking = false
     private var pending = ""
-    private val startMarkers = listOf("<|channel>thought", "<|channel>analysis", "<think>")
-    private val endMarkers = listOf("<|channel>final", "</think>", "<channel|>")
+    var sawThinkingMarker: Boolean = false
+        private set
+
+    private val startMarkers = listOf(
+        "<|channel>thought",
+        "<|channel>analysis",
+        "<think>",
+        "<|think|>"
+    )
+    private val endMarkers = listOf(
+        "<channel|>",
+        "</think>",
+        "<|channel>final"
+    )
     private val maxMarker = (startMarkers + endMarkers).maxOf { it.length }
 
     fun accept(chunk: String): String {
@@ -189,6 +231,7 @@ private class ThinkingFilter {
                     val marker = startMarkers.first { pending.startsWith(it, start) }
                     pending = pending.substring(start + marker.length)
                     inThinking = true
+                    sawThinkingMarker = true
                     continue
                 }
                 val keep = (maxMarker - 1).coerceAtMost(pending.length)
