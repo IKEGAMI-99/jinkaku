@@ -4,9 +4,15 @@ PATH = Path("app/src/main/cpp/upstream_llama_jni.cpp")
 text = PATH.read_text(encoding="utf-8")
 
 old = """        const int64_t prefill_started = now_us();\n        bool used_gpu_prefill = false;\n"""
-new = """        const int32_t generation_max_tokens = g_max_tokens;\n        const int64_t prefill_started = now_us();\n        bool used_gpu_prefill = false;\n"""
+new = """        const int32_t generation_max_tokens = g_max_tokens;\n        const int32_t phase_context_size = g_context_size;\n        const int64_t prefill_started = now_us();\n        bool used_gpu_prefill = false;\n"""
 if old not in text:
     raise RuntimeError("v0.1.25 prefill start anchor not found")
+text = text.replace(old, new, 1)
+
+old = "load_phase_runtime_locked(g_model_path, g_context_size, 0, true)"
+new = "load_phase_runtime_locked(g_model_path, phase_context_size, 0, true)"
+if old not in text:
+    raise RuntimeError("v0.1.25 CPU recovery context anchor not found")
 text = text.replace(old, new, 1)
 
 old = """        g_prefill_us = std::max<int64_t>(1, now_us() - prefill_started);\n        if (!decodeError.empty()) {\n"""
@@ -16,4 +22,4 @@ if old not in text:
 text = text.replace(old, new, 1)
 
 PATH.write_text(text, encoding="utf-8")
-print("Fixed v0.1.25 GPU/CPU phase generation counters")
+print("Fixed v0.1.25 GPU/CPU phase counters and CPU recovery context")
