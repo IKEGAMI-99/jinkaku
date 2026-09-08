@@ -41,6 +41,8 @@ fun JinkakuApp(vm: JinkakuViewModel) {
     var screen by remember { mutableStateOf(MainScreen.CHAT) }
     val snackbar = remember { SnackbarHostState() }
     val context = androidx.compose.ui.platform.LocalContext.current
+    val themePrefs = remember(context) { context.getSharedPreferences("settings", android.content.Context.MODE_PRIVATE) }
+    var darkMode by remember { mutableStateOf(themePrefs.getBoolean("dark_mode", false)) }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
@@ -51,7 +53,12 @@ fun JinkakuApp(vm: JinkakuViewModel) {
         keyboard?.hide()
     }
 
-    val statusText = if (ui.runtimeStatus == "入力中") {
+    fun setDarkMode(enabled: Boolean) {
+        darkMode = enabled
+        themePrefs.edit().putBoolean("dark_mode", enabled).apply()
+    }
+
+    val statusText = if (ui.busy && (ui.runtimeStatus == "入力中" || ui.runtimeStatus == "生成中")) {
         typingLabel(telemetry.generatedTokens)
     } else ui.runtimeStatus
 
@@ -63,7 +70,7 @@ fun JinkakuApp(vm: JinkakuViewModel) {
         }
     }
 
-    MaterialTheme(colorScheme = lightColorScheme()) {
+    MaterialTheme(colorScheme = if (darkMode) darkColorScheme() else lightColorScheme()) {
         ModalNavigationDrawer(
             drawerState = drawerState,
             drawerContent = {
@@ -160,19 +167,25 @@ fun JinkakuApp(vm: JinkakuViewModel) {
                 }
             ) { padding ->
                 when (screen) {
-                    MainScreen.SETTINGS -> SettingsScreen(vm, Modifier.padding(padding)) { file, mime ->
-                        val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", file)
-                        context.startActivity(
-                            Intent.createChooser(
-                                Intent(Intent.ACTION_SEND).apply {
-                                    type = mime
-                                    putExtra(Intent.EXTRA_STREAM, uri)
-                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                },
-                                "共有"
+                    MainScreen.SETTINGS -> SettingsScreen(
+                        vm = vm,
+                        modifier = Modifier.padding(padding),
+                        darkMode = darkMode,
+                        onDarkModeChange = ::setDarkMode,
+                        share = { file, mime ->
+                            val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", file)
+                            context.startActivity(
+                                Intent.createChooser(
+                                    Intent(Intent.ACTION_SEND).apply {
+                                        type = mime
+                                        putExtra(Intent.EXTRA_STREAM, uri)
+                                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                    },
+                                    "共有"
+                                )
                             )
-                        )
-                    }
+                        }
+                    )
                     MainScreen.MEMORY -> MemoryScreen(vm, Modifier.padding(padding))
                     MainScreen.CHAT -> ChatScreen(vm, Modifier.padding(padding))
                 }
@@ -190,8 +203,8 @@ private fun ChatScreen(vm: JinkakuViewModel, modifier: Modifier = Modifier) {
     val keyboard = LocalSoftwareKeyboardController.current
     val listState = rememberLazyListState()
 
-    LaunchedEffect(ui.messages.size, ui.generatingText.length, ui.thinking, telemetry.generatedTokens) {
-        val total = ui.messages.size + if (ui.busy && (ui.thinking || ui.generatingText.isNotBlank())) 1 else 0
+    LaunchedEffect(ui.messages.size, ui.busy, telemetry.generatedTokens) {
+        val total = ui.messages.size + if (ui.busy) 1 else 0
         if (total > 0) listState.animateScrollToItem(total - 1)
     }
 
@@ -236,15 +249,14 @@ private fun ChatScreen(vm: JinkakuViewModel, modifier: Modifier = Modifier) {
                 }
             }
 
-            if (ui.busy && (ui.thinking || ui.generatingText.isNotBlank())) {
+            if (ui.busy) {
                 item {
                     Surface(shape = RoundedCornerShape(18.dp), tonalElevation = 1.dp) {
-                        Column(Modifier.padding(14.dp)) {
-                            if (ui.thinking && ui.generatingText.isBlank()) {
-                                Text(typingLabel(telemetry.generatedTokens), style = MaterialTheme.typography.labelMedium)
-                            }
-                            if (ui.generatingText.isNotBlank()) Text(ui.generatingText)
-                        }
+                        Text(
+                            typingLabel(telemetry.generatedTokens),
+                            modifier = Modifier.padding(14.dp),
+                            style = MaterialTheme.typography.labelMedium
+                        )
                     }
                 }
             }
@@ -361,10 +373,7 @@ private fun MemoryScreen(vm: JinkakuViewModel, modifier: Modifier = Modifier) {
                         enabled = ui.memoryCount > 0 && !ui.busy && !ui.embeddingReindexing
                     ) { Text("全削除") }
                 }
-                Text(
-                    "手動MemoryではPersona、過去の出来事、好み、関係性、プロジェクトなどを直接登録できます。",
-                    style = MaterialTheme.typography.bodySmall
-                )
+                MemoryTypeGuide()
                 if (ui.embeddingReindexing) {
                     LinearProgressIndicator(
                         progress = { (ui.embeddingReindexProgress ?: 0f).coerceIn(0f, 1f) },
@@ -418,6 +427,8 @@ private fun formatMemoryDate(timestamp: Long): String =
 private fun SettingsScreen(
     vm: JinkakuViewModel,
     modifier: Modifier = Modifier,
+    darkMode: Boolean,
+    onDarkModeChange: (Boolean) -> Unit,
     share: (java.io.File, String) -> Unit
 ) {
     val ui by vm.ui.collectAsStateWithLifecycle()
@@ -431,6 +442,22 @@ private fun SettingsScreen(
         contentPadding = PaddingValues(18.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
+        item { Text("外観", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold) }
+        item {
+            Card(Modifier.fillMaxWidth()) {
+                Row(
+                    Modifier.fillMaxWidth().padding(14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("ダークモード", fontWeight = FontWeight.SemiBold)
+                        Text("画面全体を暗い配色にします。設定は次回起動後も保持されます。", style = MaterialTheme.typography.bodySmall)
+                    }
+                    Switch(checked = darkMode, onCheckedChange = onDarkModeChange)
+                }
+            }
+        }
+
         item { Text("Persona", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold) }
         item {
             Card(Modifier.fillMaxWidth()) {
@@ -515,7 +542,7 @@ private fun SettingsScreen(
         item {
             Text("推論表示", fontWeight = FontWeight.Bold)
             Text(
-                "CoTは有効で本文は非表示です。思考中は実際の生成tokenが進むたびに「入力中. → 入力中.. → 入力中...」が変化します。tokenが止まれば点も止まります。Prefill/Decode速度・token数・Backendは回答完了後だけ表示します。",
+                "CoTは有効で本文は非表示です。生成中は実際のtoken進行に連動して「入力中. → 入力中.. → 入力中...」だけを表示します。回答本文はDecode完了後に全文を一括表示し、その下にPrefill/Decode速度・token数・Backendを表示します。",
                 style = MaterialTheme.typography.bodySmall
             )
         }
