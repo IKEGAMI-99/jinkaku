@@ -12,6 +12,8 @@ val versionCodeProp = providers.gradleProperty("JINKAKU_VERSION_CODE").getOrElse
 android {
     namespace = "com.ikegami99.jinkaku"
     compileSdk = 36
+    ndkVersion = "29.0.13113456"
+
     defaultConfig {
         applicationId = "com.ikegami99.jinkaku"
         minSdk = 33
@@ -19,6 +21,14 @@ android {
         versionCode = versionCodeProp
         versionName = versionNameProp
         ndk { abiFilters += listOf("arm64-v8a") }
+        externalNativeBuild {
+            cmake {
+                arguments += listOf(
+                    "-DCMAKE_BUILD_TYPE=Release",
+                    "-DANDROID_STL=c++_shared"
+                )
+            }
+        }
     }
     signingConfigs {
         create("release") {
@@ -34,6 +44,12 @@ android {
     }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     buildFeatures { compose = true; buildConfig = true }
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.31.6"
+        }
+    }
     packaging { jniLibs.useLegacyPackaging = true; resources.excludes += setOf("/META-INF/{AL2.0,LGPL2.1}") }
 }
 
@@ -54,7 +70,6 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.10.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.10.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
-    implementation("io.github.aatricks:llmedge:0.4.7.2")
     implementation("com.google.ai.edge.litertlm:litertlm-android:0.16.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
