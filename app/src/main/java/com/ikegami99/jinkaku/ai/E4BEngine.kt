@@ -117,12 +117,11 @@ class E4BEngine(
         var rawChars = 0
         var emittedPieces = 0
 
+        // CoT is disabled. Switch the UI out of its legacy thinking state before
+        // native prompt prefill starts, so the user does not stare at "THINKING".
+        emit(GenerationEvent.Text(""))
         bridge.begin(roles.toTypedArray(), contents.toTypedArray(), MAX_GENERATION_TOKENS)
         logger.i("E4B", "Upstream Jinja prompt accepted messages=${roles.size} enableThinking=false maxTokens=$MAX_GENERATION_TOKENS")
-
-        // Tell the UI generation has started immediately. This clears the old
-        // "thinking" indicator without waiting for a visible model token.
-        emit(GenerationEvent.Text(""))
 
         try {
             while (true) {
