@@ -13,6 +13,13 @@ def main() -> None:
     if "SPARKLE_BACK_V052" not in text:
         raise RuntimeError("v052 UI patch must run before v053")
 
+    # The old wordmark is also used by the adaptive launcher icon. Keep that
+    # resource intact and switch only the header decoder to the supplied PNG.
+    old_resource = "R.drawable.jinkaku_wordmark_png"
+    if text.count(old_resource) != 1:
+        raise RuntimeError("Expected exactly one header wordmark resource")
+    text = text.replace(old_resource, "R.drawable.jinkaku_header_wordmark", 1)
+
     old = '''                                        bitmap = wordmarkBitmap!!,
                                         contentDescription = "Jinkaku",
                                         modifier = Modifier.width(142.dp).height(23.dp)'''
