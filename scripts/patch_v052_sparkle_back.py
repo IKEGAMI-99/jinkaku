@@ -36,20 +36,13 @@ def patch_ui() -> None:
             "AutoAwesome import",
         )
 
-    back_anchor = '''    MaterialTheme(\n        colorScheme = modernColorScheme(darkMode, accentName),\n'''
-    back_insert = '''    // SPARKLE_BACK_V052: system back returns sub-screens to Chat.\n    BackHandler(enabled = screen != ModernScreen.CHAT) {\n        dismissIme()\n        screen = ModernScreen.CHAT\n    }\n\n    MaterialTheme(\n        colorScheme = modernColorScheme(darkMode, accentName),\n'''
+    back_anchor = '''    MaterialTheme(\n        colorScheme = modernColorScheme(darkMode, accentColor),\n'''
+    back_insert = '''    // SPARKLE_BACK_V052: system back returns sub-screens to Chat.\n    BackHandler(enabled = screen != ModernScreen.CHAT) {\n        dismissIme()\n        screen = ModernScreen.CHAT\n    }\n\n    MaterialTheme(\n        colorScheme = modernColorScheme(darkMode, accentColor),\n'''
     text = replace_once(text, back_anchor, back_insert, "sub-screen back navigation")
 
     old_button = '''                                FilledIconButton(\n                                    onClick = { dismissIme(); vm.newChat() },\n                                    modifier = Modifier.padding(end = 8.dp).size(48.dp),\n                                    colors = androidx.compose.material3.IconButtonDefaults.filledIconButtonColors(\n                                        containerColor = MaterialTheme.colorScheme.primary,\n                                        contentColor = Color.White\n                                    )\n                                ) {\n                                    Box(Modifier.size(30.dp), contentAlignment = Alignment.Center) {\n                                        Icon(\n                                            Icons.Rounded.Add,\n                                            contentDescription = "新規チャット",\n                                            modifier = Modifier.size(24.dp)\n                                        )\n                                        Text(\n                                            "✦",\n                                            modifier = Modifier.align(Alignment.TopEnd),\n                                            color = MaterialTheme.colorScheme.secondary,\n                                            style = MaterialTheme.typography.labelSmall,\n                                            fontWeight = FontWeight.Black\n                                        )\n                                    }\n                                }\n'''
     new_button = '''                                FilledIconButton(\n                                    onClick = { dismissIme(); vm.newChat() },\n                                    modifier = Modifier.padding(end = 8.dp).size(48.dp),\n                                    colors = androidx.compose.material3.IconButtonDefaults.filledIconButtonColors(\n                                        containerColor = MaterialTheme.colorScheme.primary,\n                                        contentColor = Color.White\n                                    )\n                                ) {\n                                    Icon(\n                                        Icons.Rounded.AutoAwesome,\n                                        contentDescription = "新規チャット",\n                                        modifier = Modifier.size(27.dp),\n                                        tint = Color.White\n                                    )\n                                }\n'''
     text = replace_once(text, old_button, new_button, "sparkle-only new chat icon")
-
-    # Marker for idempotency and easier build inspection.
-    text = text.replace(
-        "// SPARKLE_BACK_V052: system back returns sub-screens to Chat.",
-        "// SPARKLE_BACK_V052: system back returns sub-screens to Chat.",
-        1,
-    )
 
     path.write_text(text, encoding="utf-8")
     print("Applied SPARKLE_BACK_V052: sparkle-only new chat + sub-screen system back")
