@@ -1,5 +1,5 @@
 name: Android Release
-# v0.1.50 edge-gloss glass build
+# v0.1.51 bright accents + sparkle new-chat build
 
 on:
   push:
@@ -60,6 +60,7 @@ jobs:
           python3 scripts/patch_v048_candy_glass.py
           python3 scripts/patch_v049_kawaii_glass.py
           python3 scripts/patch_v050_edge_gloss.py
+          python3 scripts/patch_v051_bright_accents.py
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
