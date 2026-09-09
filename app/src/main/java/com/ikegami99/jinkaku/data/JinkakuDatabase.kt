@@ -79,6 +79,25 @@ class JinkakuDatabase(context: Context) : SQLiteOpenHelper(context, "jinkaku.db"
         return out
     }
 
+    fun clearAllChatsAndCreateFresh(): Pair<Int, Long> {
+        val database = writableDatabase
+        database.beginTransaction()
+        return try {
+            val deleted = database.delete("chats", null, null)
+            val now = System.currentTimeMillis()
+            val values = ContentValues().apply {
+                put("title", "New chat")
+                put("created_at", now)
+                put("updated_at", now)
+            }
+            val newChatId = database.insertOrThrow("chats", null, values)
+            database.setTransactionSuccessful()
+            deleted to newChatId
+        } finally {
+            database.endTransaction()
+        }
+    }
+
     fun maybeTitleChat(chatId: Long, firstUserText: String) {
         val current = readableDatabase.rawQuery("SELECT title FROM chats WHERE id=?", arrayOf(chatId.toString())).use { c ->
             if (c.moveToFirst()) c.getString(0) else return

@@ -205,6 +205,27 @@ class JinkakuViewModel(app: Application) : AndroidViewModel(app) {
         logger.i("CHAT", "Chat selected id=$chatId")
     }
 
+    fun clearChatHistory() {
+        if (_ui.value.busy || anyModelImporting()) {
+            setError("処理中はChat履歴を削除できません")
+            return
+        }
+        generationJob?.cancel()
+        memoryIdleJob?.cancel()
+        e4b.unload()
+        val (deleted, freshChatId) = db.clearAllChatsAndCreateFresh()
+        currentChatId = freshChatId
+        prefs.edit().putLong(KEY_CURRENT_CHAT_ID, currentChatId).apply()
+        _ui.value = _ui.value.copy(
+            generatingText = "",
+            thinking = false,
+            runtimeStatus = "IDLE",
+            notice = "Chat履歴を${deleted}件削除しました"
+        )
+        refresh()
+        logger.w("CHAT", "All chat history cleared deletedChats=$deleted freshChatId=$freshChatId")
+    }
+
     fun send(text: String) {
         val clean = text.trim()
         if (clean.isEmpty() || _ui.value.busy) return

@@ -149,6 +149,7 @@ fun ModernJinkakuApp(vm: JinkakuViewModel) {
     val prefs = remember(context) { context.getSharedPreferences("settings", android.content.Context.MODE_PRIVATE) }
     var darkMode by remember { mutableStateOf(prefs.getBoolean("dark_mode", false)) }
     var screen by remember { mutableStateOf(ModernScreen.CHAT) }
+    var confirmClearChats by remember { mutableStateOf(false) }
     val drawerState = androidx.compose.material3.rememberDrawerState(androidx.compose.material3.DrawerValue.Closed)
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -187,6 +188,26 @@ fun ModernJinkakuApp(vm: JinkakuViewModel) {
             extraLarge = RoundedCornerShape(34.dp)
         )
     ) {
+        if (confirmClearChats) {
+            AlertDialog(
+                onDismissRequest = { confirmClearChats = false },
+                title = { Text("Chat履歴を全件削除") },
+                text = { Text("すべてのチャットとメッセージを削除します。長期MemoryとPersonaは残ります。") },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            confirmClearChats = false
+                            vm.clearChatHistory()
+                            screen = ModernScreen.CHAT
+                            scope.launch { drawerState.close() }
+                        },
+                        enabled = !ui.busy
+                    ) { Text("全件削除") }
+                },
+                dismissButton = { TextButton(onClick = { confirmClearChats = false }) { Text("キャンセル") } }
+            )
+        }
+
         ModalNavigationDrawer(
             drawerState = drawerState,
             drawerContent = {
@@ -228,12 +249,23 @@ fun ModernJinkakuApp(vm: JinkakuViewModel) {
                         )
                         HorizontalDivider(Modifier.padding(vertical = 12.dp))
                         Row(
-                            Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp),
+                            Modifier.fillMaxWidth().padding(start = 20.dp, end = 10.dp, top = 4.dp, bottom = 4.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Icon(Icons.Rounded.History, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
                             Spacer(Modifier.width(10.dp))
                             Text("Chat履歴", fontWeight = FontWeight.SemiBold)
+                            Spacer(Modifier.weight(1f))
+                            TextButton(
+                                onClick = { confirmClearChats = true },
+                                enabled = ui.chats.isNotEmpty() && !ui.busy &&
+                                    !ui.e4bImporting && !ui.e2bImporting &&
+                                    !ui.embeddingImporting && !ui.embeddingReindexing
+                            ) {
+                                Icon(Icons.Rounded.DeleteOutline, null, modifier = Modifier.size(17.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("全件削除")
+                            }
                         }
                         LazyColumn(
                             modifier = Modifier.fillMaxSize(),
@@ -364,6 +396,7 @@ private fun ModernChatScreen(vm: JinkakuViewModel, modifier: Modifier = Modifier
     val focusManager = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
     val listState = rememberLazyListState()
+    val showTypingBubble = ui.busy && telemetry.phase in setOf("PREFILL", "THINKING", "DECODE")
 
     fun submit() {
         val value = input.trim()
@@ -374,8 +407,8 @@ private fun ModernChatScreen(vm: JinkakuViewModel, modifier: Modifier = Modifier
         vm.send(value)
     }
 
-    LaunchedEffect(ui.messages.size, ui.busy, telemetry.generatedTokens) {
-        val total = ui.messages.size + if (ui.busy) 1 else 0
+    LaunchedEffect(ui.messages.size, showTypingBubble, telemetry.generatedTokens) {
+        val total = ui.messages.size + if (showTypingBubble) 1 else 0
         if (total > 0) listState.animateScrollToItem(total - 1)
     }
 
@@ -428,7 +461,7 @@ private fun ModernChatScreen(vm: JinkakuViewModel, modifier: Modifier = Modifier
                 }
             }
 
-            if (ui.busy) {
+            if (showTypingBubble) {
                 item {
                     Surface(
                         shape = RoundedCornerShape(24.dp, 24.dp, 24.dp, 6.dp),
