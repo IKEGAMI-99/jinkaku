@@ -1,0 +1,1 @@
+New gradient launcher icon source generated 2026-09-09. This marker exists only to force an icon refresh build; launcher PNG is stored in mipmap-xxxhdpi.
