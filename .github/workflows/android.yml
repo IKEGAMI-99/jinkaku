@@ -39,6 +39,7 @@ jobs:
           python3 scripts/patch_v031_visual_theme.py
           python3 scripts/patch_v041_wordmark_png.py
           python3 scripts/patch_v042_brand_finish.py
+          python3 scripts/patch_v043_vivid_mix.py
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
