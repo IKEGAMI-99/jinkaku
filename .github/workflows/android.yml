@@ -41,6 +41,7 @@ jobs:
           python3 scripts/patch_v042_brand_finish.py
           python3 scripts/patch_v043_vivid_mix.py
           python3 scripts/patch_v046_finish.py
+          python3 scripts/fix_v046_compile.py
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
