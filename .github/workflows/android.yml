@@ -1,5 +1,5 @@
 name: Android Release
-# v0.1.47 release build
+# v0.1.48 candy liquid-glass build
 
 on:
   push:
@@ -57,6 +57,7 @@ jobs:
               p.write_text(t, encoding='utf-8')
           PY
           python3 scripts/patch_v047_ui_refine.py
+          python3 scripts/patch_v048_candy_glass.py
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
