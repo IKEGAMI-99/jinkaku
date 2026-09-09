@@ -1,5 +1,5 @@
 name: Android Release
-# v0.1.51 bright accents + sparkle new-chat build
+# v0.1.52 sparkle-only new-chat + back navigation build
 
 on:
   push:
@@ -61,6 +61,7 @@ jobs:
           python3 scripts/patch_v049_kawaii_glass.py
           python3 scripts/patch_v050_edge_gloss.py
           python3 scripts/patch_v051_bright_accents.py
+          python3 scripts/patch_v052_sparkle_back.py
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
