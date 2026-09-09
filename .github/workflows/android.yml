@@ -35,6 +35,7 @@ jobs:
           python3 scripts/fix_v024_prompt_patch.py
           python3 scripts/patch_v026_chat_delete.py
           python3 scripts/patch_v028_sampling_controls.py
+          python3 scripts/patch_v029_memory_edit_accent.py
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
