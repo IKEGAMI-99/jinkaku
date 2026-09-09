@@ -2,6 +2,9 @@
 
 完全ローカルを基本としたAndroid人格AIです。メイン会話は **HauhauCS Gemma 4 E4B Uncensored GGUF**、長期記憶の抽出・整理は **Gemma 4 E2B LiteRT-LM** が担当します。
 
+Chat / Codexで変更を引き継ぐ場合は、[変更・ワードマーク差し替え手順](docs/CHAT_HANDOFF.md) を参照してください。
+ビルド時のPythonパッチ、編集対象、画像変換、GitHubへの反映、検証・更新配布の手順をまとめています。
+
 ## v0.1.0 MVP
 
 - E4B Q4_K_M GGUFをアプリからダウンロードしてローカル推論
@@ -29,7 +32,11 @@ EmbeddingGemma 300MはHugging Face側でライセンス同意が必要なため�
 
 ## ビルド
 
-JDK 17 + Gradle 8.13 + Android SDK 36。
+JDK 17 + Gradle 8.13 + Android SDK 36。NDK・CMakeの指定は `.github/workflows/android.yml` を参照してください。
+
+**ビルド前に、最新ワークフローの `Apply CPU runtime patches` ステップ全体を適用してください。**
+保存されているベースソースへ複数のPythonパッチを順番に適用してから、APKを作る構成です。
+ローカルでの再現方法は [引き継ぎ手順](docs/CHAT_HANDOFF.md#5-パッチ適用ビルドの確認方法) を参照してください。
 
 ```bash
 gradle :app:assembleRelease
