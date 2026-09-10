@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
-    <item>
+    <item
+        android:left="12dp"
+        android:top="12dp"
+        android:right="12dp"
+        android:bottom="12dp">
         <bitmap
             android:src="@drawable/jinkaku_app_icon_art"
             android:gravity="fill" />
