@@ -1,5 +1,5 @@
 name: Android Release
-# v0.1.63 Web prefill budget
+# v0.1.64 Monologue mode
 
 on:
   push:
@@ -73,6 +73,7 @@ jobs:
           python3 scripts/fix_v062_patch_anchors.py
           python3 scripts/patch_v062_tavily_web_search.py
           python3 scripts/patch_v063_web_prefill_budget.py
+          python3 scripts/patch_v064_monologue.py
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
