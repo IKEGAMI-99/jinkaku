@@ -64,7 +64,10 @@ def patch_view_model() -> None:
                         currentUserMessage = "Make one spontaneous remark for the quiet chat.",
                         systemPrompt = system,
                         history = history,
-                        contextSize = _ui.value.contextSize
+                        contextSize = _ui.value.contextSize,
+                        enableThinking = _ui.value.thinkingEnabled,
+                        topK = _ui.value.topK,
+                        temperature = _ui.value.temperature
                     ).collect { event ->
                         when (event) {
                             GenerationEvent.Thinking -> _ui.value = _ui.value.copy(
