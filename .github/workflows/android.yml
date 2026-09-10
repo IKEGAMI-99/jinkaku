@@ -1,5 +1,5 @@
 name: Android Release
-# v0.1.57 custom AI image avatar
+# v0.1.58 custom AI avatar center crop
 
 on:
   push:
@@ -67,6 +67,7 @@ jobs:
           python3 scripts/patch_v056_customization.py
           python3 scripts/fix_v056_canvas.py
           python3 scripts/patch_v057_custom_ai_avatar.py
+          python3 scripts/patch_v058_avatar_crop.py
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
