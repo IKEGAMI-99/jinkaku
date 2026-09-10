@@ -1,5 +1,5 @@
 name: Android Release
-# v0.1.60 drawer icon contrast + context label cleanup
+# v0.1.61 memory role attribution
 
 on:
   push:
@@ -69,6 +69,7 @@ jobs:
           python3 scripts/patch_v057_custom_ai_avatar.py
           python3 scripts/patch_v058_avatar_crop.py
           python3 scripts/patch_v060_ui_visibility.py
+          python3 scripts/patch_v061_memory_role_attribution.py
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
