@@ -65,6 +65,7 @@ jobs:
           python3 scripts/patch_v053_wordmark.py
           python3 scripts/patch_v054_diagonal_glass.py
           python3 scripts/patch_v056_customization.py
+          python3 scripts/fix_v056_canvas.py
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
