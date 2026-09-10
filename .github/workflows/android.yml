@@ -1,5 +1,5 @@
 name: Android Release
-# v0.1.66 Random persona generator
+# v0.1.67 Short conversational replies
 
 on:
   push:
@@ -75,6 +75,7 @@ jobs:
           python3 scripts/patch_v063_web_prefill_budget.py
           python3 scripts/patch_v064_monologue.py
           python3 scripts/patch_v066_random_persona.py
+          python3 scripts/patch_v067_reply_style.py
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
