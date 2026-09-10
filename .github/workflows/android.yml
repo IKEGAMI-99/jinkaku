@@ -1,5 +1,5 @@
 name: Android Release
-# v0.1.67 Short conversational replies
+# v0.1.68 Collapsible settings categories + simplified chat header
 
 on:
   push:
@@ -76,6 +76,7 @@ jobs:
           python3 scripts/patch_v064_monologue.py
           python3 scripts/patch_v066_random_persona.py
           python3 scripts/patch_v067_reply_style.py
+          python3 scripts/patch_v068_settings_categories.py
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
