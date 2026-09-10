@@ -1,5 +1,5 @@
 name: Android Release
-# v0.1.64 Monologue mode
+# v0.1.66 Random persona generator
 
 on:
   push:
@@ -74,6 +74,7 @@ jobs:
           python3 scripts/patch_v062_tavily_web_search.py
           python3 scripts/patch_v063_web_prefill_budget.py
           python3 scripts/patch_v064_monologue.py
+          python3 scripts/patch_v066_random_persona.py
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
