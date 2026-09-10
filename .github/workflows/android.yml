@@ -70,6 +70,7 @@ jobs:
           python3 scripts/patch_v058_avatar_crop.py
           python3 scripts/patch_v060_ui_visibility.py
           python3 scripts/patch_v061_memory_role_attribution.py
+          python3 scripts/fix_v062_patch_anchors.py
           python3 scripts/patch_v062_tavily_web_search.py
       - uses: gradle/actions/setup-gradle@v4
         with:
