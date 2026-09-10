@@ -1,5 +1,5 @@
 name: Android Release
-# v0.1.58 custom AI avatar center crop
+# v0.1.60 drawer icon contrast + context label cleanup
 
 on:
   push:
@@ -68,6 +68,7 @@ jobs:
           python3 scripts/fix_v056_canvas.py
           python3 scripts/patch_v057_custom_ai_avatar.py
           python3 scripts/patch_v058_avatar_crop.py
+          python3 scripts/patch_v060_ui_visibility.py
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
