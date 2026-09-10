@@ -1,5 +1,5 @@
 name: Android Release
-# v0.1.61 memory role attribution
+# v0.1.62 Tavily web search
 
 on:
   push:
@@ -70,6 +70,7 @@ jobs:
           python3 scripts/patch_v058_avatar_crop.py
           python3 scripts/patch_v060_ui_visibility.py
           python3 scripts/patch_v061_memory_role_attribution.py
+          python3 scripts/patch_v062_tavily_web_search.py
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
