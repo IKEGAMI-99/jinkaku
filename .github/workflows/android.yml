@@ -1,5 +1,5 @@
 name: Android Release
-# v0.1.62 Tavily web search
+# v0.1.63 Web prefill budget
 
 on:
   push:
@@ -72,6 +72,7 @@ jobs:
           python3 scripts/patch_v061_memory_role_attribution.py
           python3 scripts/fix_v062_patch_anchors.py
           python3 scripts/patch_v062_tavily_web_search.py
+          python3 scripts/patch_v063_web_prefill_budget.py
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
