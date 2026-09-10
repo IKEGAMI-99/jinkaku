@@ -18,16 +18,24 @@ def patch_view_model() -> None:
 
     text = one(
         text,
-        "                    val system = buildSystemPrompt(relevant.map { it.content })\n",
-        "                    val system = buildSystemPrompt(relevant)\n",
+        "                    val system = buildSystemPrompt(relevant.map { it.content }, _ui.value.thinkingEnabled)\n",
+        "                    val system = buildSystemPrompt(relevant, _ui.value.thinkingEnabled)\n",
         "pass full memory records to prompt builder",
     )
 
-    old = '''    private fun buildSystemPrompt(memories: List<String>): String {
+    old = '''    private fun buildSystemPrompt(memories: List<String>, enableThinking: Boolean): String {
         val persona = db.currentPersona()
         val memoryBlock = if (memories.isEmpty()) "(none)" else memories.joinToString("\\n") { "- $it" }
-        return """<|think|>
-You are Jinkaku, a persistent local AI with an evolving but coherent personality. Think carefully before answering, but keep internal reasoning private. Output only the final answer after thinking. Do not blindly agree. Be consistent with durable memories while treating them as fallible context. Reply naturally in the user's language.\nPersona state: $persona\nRelevant long-term memories:\n$memoryBlock""".trimIndent()
+        val reasoning = if (enableThinking) {
+            "<|think|>\\nThink carefully before answering, but keep internal reasoning private. Output only the final answer after thinking."
+        } else {
+            "Answer directly without a hidden thinking/reasoning phase. Do not emit thought or analysis markers."
+        }
+        return """$reasoning
+You are Jinkaku, a persistent local AI with an evolving but coherent personality. Do not blindly agree. Be consistent with durable memories while treating them as fallible context. Reply naturally in the user's language.
+Persona state: $persona
+Relevant long-term memories:
+$memoryBlock""".trimIndent()
     }
 '''
 
@@ -40,14 +48,19 @@ You are Jinkaku, a persistent local AI with an evolving but coherent personality
         else -> "CONTEXT"
     }
 
-    private fun buildSystemPrompt(memories: List<MemoryRecord>): String {
+    private fun buildSystemPrompt(memories: List<MemoryRecord>, enableThinking: Boolean): String {
         val persona = db.currentPersona()
         val memoryBlock = if (memories.isEmpty()) "(none)" else memories.joinToString("\\n") { memory ->
             val owner = memoryOwner(memory)
             "- [owner=$owner type=${memory.type} origin=${memory.origin}] ${memory.content}"
         }
-        return """<|think|>
-You are Jinkaku, a persistent local AI with an evolving but coherent personality. Think carefully before answering, but keep internal reasoning private. Output only the final answer after thinking. Do not blindly agree. Be consistent with durable memories while treating them as fallible context. Reply naturally in the user's language.
+        val reasoning = if (enableThinking) {
+            "<|think|>\\nThink carefully before answering, but keep internal reasoning private. Output only the final answer after thinking."
+        } else {
+            "Answer directly without a hidden thinking/reasoning phase. Do not emit thought or analysis markers."
+        }
+        return """$reasoning
+You are Jinkaku, a persistent local AI with an evolving but coherent personality. Do not blindly agree. Be consistent with durable memories while treating them as fallible context. Reply naturally in the user's language.
 Persona state: $persona
 Relevant long-term memories (ownership metadata is authoritative):
 $memoryBlock
