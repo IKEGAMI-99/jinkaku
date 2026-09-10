@@ -1,0 +1,91 @@
+from pathlib import Path
+
+VM = Path("app/src/main/java/com/ikegami99/jinkaku/JinkakuViewModel.kt")
+E2B = Path("app/src/main/java/com/ikegami99/jinkaku/ai/E2BMemoryEngine.kt")
+
+
+def one(text: str, old: str, new: str, label: str) -> str:
+    if old not in text:
+        raise RuntimeError(f"anchor not found: {label}")
+    return text.replace(old, new, 1)
+
+
+def patch_view_model() -> None:
+    text = VM.read_text(encoding="utf-8")
+    if "MEMORY_ROLE_ATTRIBUTION_V061" in text:
+        print("MEMORY_ROLE_ATTRIBUTION_V061 already applied to JinkakuViewModel")
+        return
+    if "UI_VISIBILITY_V060" not in text:
+        raise RuntimeError("v060 UI patch must run before v061")
+
+    text = one(
+        text,
+        "                    val system = buildSystemPrompt(relevant.map { it.content })\n",
+        "                    val system = buildSystemPrompt(relevant)\n",
+        "pass full memory records to prompt builder",
+    )
+
+    old = '''    private fun buildSystemPrompt(memories: List<String>): String {
+        val persona = db.currentPersona()
+        val memoryBlock = if (memories.isEmpty()) "(none)" else memories.joinToString("\\n") { "- $it" }
+        return """<|think|>
+You are Jinkaku, a persistent local AI with an evolving but coherent personality. Think carefully before answering, but keep internal reasoning private. Output only the final answer after thinking. Do not blindly agree. Be consistent with durable memories while treating them as fallible context. Reply naturally in the user's language.\nPersona state: $persona\nRelevant long-term memories:\n$memoryBlock""".trimIndent()
+    }
+'''
+
+    new = '''    // MEMORY_ROLE_ATTRIBUTION_V061: preserve who each memory is about when it is injected.
+    private fun memoryOwner(memory: MemoryRecord): String = when {
+        memory.type.equals("SELF", ignoreCase = true) || memory.origin.equals("AI_SELF", ignoreCase = true) -> "JINKAKU"
+        memory.type.equals("USER", ignoreCase = true) || memory.type.equals("PREFERENCE", ignoreCase = true) || memory.origin.startsWith("USER_", ignoreCase = true) -> "USER"
+        memory.type.equals("RELATIONSHIP", ignoreCase = true) -> "RELATIONSHIP"
+        memory.type.equals("PROJECT", ignoreCase = true) || memory.origin.equals("PROJECT", ignoreCase = true) -> "PROJECT"
+        else -> "CONTEXT"
+    }
+
+    private fun buildSystemPrompt(memories: List<MemoryRecord>): String {
+        val persona = db.currentPersona()
+        val memoryBlock = if (memories.isEmpty()) "(none)" else memories.joinToString("\\n") { memory ->
+            val owner = memoryOwner(memory)
+            "- [owner=$owner type=${memory.type} origin=${memory.origin}] ${memory.content}"
+        }
+        return """<|think|>
+You are Jinkaku, a persistent local AI with an evolving but coherent personality. Think carefully before answering, but keep internal reasoning private. Output only the final answer after thinking. Do not blindly agree. Be consistent with durable memories while treating them as fallible context. Reply naturally in the user's language.
+Persona state: $persona
+Relevant long-term memories (ownership metadata is authoritative):
+$memoryBlock
+Memory ownership rules:
+- owner=USER describes the human user. Never treat it as your own biography, preference, experience, or statement.
+- owner=JINKAKU describes you, the assistant.
+- owner=RELATIONSHIP describes facts about the user-assistant relationship; do not assign them to only one side unless the content says so.
+- owner=PROJECT describes project state or facts, not personal identity.
+- If a memory sentence contains first-person words such as I / me / my / 私 / 僕 / 俺, interpret them according to owner metadata rather than the literal pronoun.""".trimIndent()
+    }
+'''
+
+    text = one(text, old, new, "role-aware system memory block")
+    VM.write_text(text, encoding="utf-8")
+    print("Applied MEMORY_ROLE_ATTRIBUTION_V061 to JinkakuViewModel")
+
+
+def patch_extractor() -> None:
+    text = E2B.read_text(encoding="utf-8")
+    marker = "MEMORY_ROLE_EXTRACTION_V061"
+    if marker in text:
+        print(f"{marker} already applied to E2BMemoryEngine")
+        return
+
+    old = '        private const val MEMORY_SYSTEM="""You are a local memory extraction worker. Do not chat and do not reveal reasoning. Extract only durable facts, preferences, project state, relationship facts, or episodes worth remembering. Ignore transient small talk. Return exactly one JSON object: {"memories":[{"content":"concise memory","type":"USER|SELF|RELATIONSHIP|EPISODIC|PREFERENCE|PROJECT","importance":"CORE|HIGH|NORMAL|LOW","confidence":"EXPLICIT|STRONG_INFERENCE|WEAK_INFERENCE","origin":"USER_EXPLICIT|USER_INFERRED|AI_SELF|SYSTEM|PROJECT","tags":["tag"]}]}. Use an empty memories array when nothing is worth storing."""\n'
+    new = '        // MEMORY_ROLE_EXTRACTION_V061: make the grammatical subject explicit so USER memories cannot be mistaken for assistant self-memory.\n        private const val MEMORY_SYSTEM="""You are a local memory extraction worker. Do not chat and do not reveal reasoning. Each input is explicitly a HUMAN USER message. Extract only durable facts, preferences, project state, relationship facts, or episodes worth remembering. Ignore transient small talk. Preserve the input language. Resolve pronouns before storing: when the human user says I / me / my / 私 / 僕 / 俺, write the memory with an explicit user subject such as The user... / ユーザーは..., never as first-person text. Use type SELF or origin AI_SELF only when the remembered fact is actually about Jinkaku/the assistant, not merely because the user spoke in first person. For facts or preferences about the human user, use type USER or PREFERENCE (or EPISODIC/PROJECT when appropriate) and origin USER_EXPLICIT or USER_INFERRED. Return exactly one JSON object: {"memories":[{"content":"concise memory with explicit subject","type":"USER|SELF|RELATIONSHIP|EPISODIC|PREFERENCE|PROJECT","importance":"CORE|HIGH|NORMAL|LOW","confidence":"EXPLICIT|STRONG_INFERENCE|WEAK_INFERENCE","origin":"USER_EXPLICIT|USER_INFERRED|AI_SELF|SYSTEM|PROJECT","tags":["tag"]}]}. Use an empty memories array when nothing is worth storing."""\n'
+
+    text = one(text, old, new, "memory extractor ownership prompt")
+    E2B.write_text(text, encoding="utf-8")
+    print("Applied MEMORY_ROLE_EXTRACTION_V061 to E2BMemoryEngine")
+
+
+def main() -> None:
+    patch_view_model()
+    patch_extractor()
+
+
+if __name__ == "__main__":
+    main()
