@@ -15,8 +15,6 @@ def patch_view_model() -> None:
     if "MEMORY_ROLE_ATTRIBUTION_V061" in text:
         print("MEMORY_ROLE_ATTRIBUTION_V061 already applied to JinkakuViewModel")
         return
-    if "UI_VISIBILITY_V060" not in text:
-        raise RuntimeError("v060 UI patch must run before v061")
 
     text = one(
         text,
