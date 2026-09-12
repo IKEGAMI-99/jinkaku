@@ -13,6 +13,7 @@ import com.google.ai.edge.litertlm.SamplerConfig
 import com.google.ai.edge.litertlm.ThinkingConfig
 import com.ikegami99.jinkaku.data.ChatMessage
 import com.ikegami99.jinkaku.logging.AppLogger
+import kotlinx.coroutines.flow.collect
 import org.json.JSONObject
 import java.io.File
 
@@ -34,12 +35,13 @@ class E2BMemoryEngine(
 
         logger.i(
             "E2B",
-            "Memory extraction start count=${messages.size} runtime=LiteRT-LM backend=GPU mtp=ON ctx=$MAX_CONTEXT_TOKENS"
+            "Memory extraction start count=${messages.size} runtime=LiteRT-LM backend=GPU mtp=ON ctx=$MAX_CONTEXT_TOKENS async=true"
         )
 
         ExperimentalFlags.enableBenchmark = true
         ExperimentalFlags.enableSpeculativeDecoding = true
         Engine.setNativeMinLogSeverity(LogSeverity.ERROR)
+        context.cacheDir.mkdirs()
 
         val config = EngineConfig(
             modelPath = model.absolutePath,
@@ -56,17 +58,27 @@ class E2BMemoryEngine(
 
             // Keep each memory item in a fresh conversation so prompt history cannot silently
             // consume the small fast-profile context window during maintenance batches.
+            // Use the exact asynchronous generation path proven in E2B-SpeedLab. The GPU backend
+            // is not forced through the synchronous sendMessage() convenience API.
             messages.forEach { msg ->
                 engine.createConversation(memoryConversationConfig()).use { conversation ->
-                    val response = conversation.sendMessage(
-                        "User message id=${msg.id}:\n${msg.content}\nReturn JSON only."
-                    )
+                    val response = StringBuilder()
+                    conversation.sendMessageAsync(
+                        text = "User message id=${msg.id}:\n${msg.content}\nReturn JSON only.",
+                        maxOutputToken = MAX_OUTPUT_TOKENS,
+                        thinkingConfig = ThinkingConfig(
+                            enableThinking = false,
+                            thinkingTokenBudget = 0
+                        )
+                    ).collect { chunk ->
+                        response.append(chunk.toString())
+                    }
                     inserted += parseAndStore(response.toString(), msg.id)
                 }
             }
         }
 
-        logger.i("E2B", "Memory extraction complete inserted=$inserted backend=GPU mtp=ON")
+        logger.i("E2B", "Memory extraction complete inserted=$inserted backend=GPU mtp=ON async=true")
         return inserted
     }
 
