@@ -57,12 +57,13 @@ def patch_view_model() -> None:
 '''
     text = one(text, old_sync, new_sync, "startup-safe embedding engine")
 
-    # v077 forced the system prompt to non-thinking mode. Restore the user's toggle.
+    # v077 forced both normal chat and monologue system prompts to non-thinking mode.
+    # Restore only the interactive-chat prompt; monologue intentionally stays direct/fast.
     text = one(
         text,
-        "buildSystemPrompt(relevant, false)",
-        "buildSystemPrompt(relevant, _ui.value.thinkingEnabled)",
-        "system prompt thinking toggle",
+        'val system = buildSystemPrompt(relevant, false) + "\\n\\n" + buildReplyStyleRulesV067(replyProfile)',
+        'val system = buildSystemPrompt(relevant, _ui.value.thinkingEnabled) + "\\n\\n" + buildReplyStyleRulesV067(replyProfile)',
+        "normal chat system prompt thinking toggle",
     )
 
     text = one(
