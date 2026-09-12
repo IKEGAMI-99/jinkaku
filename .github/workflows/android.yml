@@ -85,18 +85,51 @@ jobs:
           python3 scripts/fix_v073_e2b_selector_routing.py
           python3 scripts/fix_v074_e2b_thought_channel.py
           python3 scripts/fix_v076_e2b_gpu_mtp_fixed.py
-          # v062/v067 append more UiState arguments after Temperature, so normalize
-          # the old v028 anchor before the final E2B-only consolidation patch.
+          # Later patches append UiState args after Temperature. Normalize the old v028
+          # anchor, and disable v077's destructive Thinking-block rewrite. E2B itself is
+          # still Thinking-OFF; keeping the existing Compose block intact avoids brace drift.
           python3 - <<'PY'
           from pathlib import Path
-          p = Path('app/src/main/java/com/ikegami99/jinkaku/JinkakuViewModel.kt')
-          t = p.read_text(encoding='utf-8')
+          vm = Path('app/src/main/java/com/ikegami99/jinkaku/JinkakuViewModel.kt')
+          t = vm.read_text(encoding='utf-8')
           old = '            temperature = prefs.getFloat("temperature", 1.0f).coerceIn(0.1f, 1.5f),\n'
           if old in t:
               t = t.replace(old, old[:-2] + '\n', 1)
-              p.write_text(t, encoding='utf-8')
+              vm.write_text(t, encoding='utf-8')
+
+          patch = Path('scripts/patch_v077_e2b_only.py')
+          p = patch.read_text(encoding='utf-8')
+          p = p.replace(
+              '    thinking_label = \'Text("Thinking", fontWeight = FontWeight.SemiBold)\'\n',
+              '    thinking_label = "__SKIP_DESTRUCTIVE_THINKING_REWRITE__"\n',
+              1,
+          )
+          patch.write_text(p, encoding='utf-8')
           PY
           python3 scripts/patch_v077_e2b_only.py
+          # The generated UiState still has web/reply fields after Top-P, so Top-P must
+          # retain a trailing comma. Also lock the old Thinking switch in the UI: E2B
+          # LiteRT-LM remains thinking-off by design.
+          python3 - <<'PY'
+          from pathlib import Path
+          vm = Path('app/src/main/java/com/ikegami99/jinkaku/JinkakuViewModel.kt')
+          t = vm.read_text(encoding='utf-8')
+          t = t.replace(
+              '            topP = prefs.getFloat("top_p", 0.90f).coerceIn(0.05f, 1.0f)\n            webSearchMode =',
+              '            topP = prefs.getFloat("top_p", 0.90f).coerceIn(0.05f, 1.0f),\n            webSearchMode =',
+              1,
+          )
+          vm.write_text(t, encoding='utf-8')
+
+          ui = Path('app/src/main/java/com/ikegami99/jinkaku/ui/ModernJinkakuApp.kt')
+          u = ui.read_text(encoding='utf-8')
+          u = u.replace('Text("Thinking", fontWeight = FontWeight.SemiBold)', 'Text("Thinking (E2BではOFF固定)", fontWeight = FontWeight.SemiBold)', 1)
+          ui.write_text(u, encoding='utf-8')
+          PY
+          echo '=== generated ViewModel state ==='
+          nl -ba app/src/main/java/com/ikegami99/jinkaku/JinkakuViewModel.kt | sed -n '90,125p'
+          echo '=== generated Settings tail ==='
+          nl -ba app/src/main/java/com/ikegami99/jinkaku/ui/ModernJinkakuApp.kt | sed -n '1520,2040p'
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
