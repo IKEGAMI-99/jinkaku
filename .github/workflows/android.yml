@@ -1,5 +1,4 @@
 name: Android Release
-# v0.1.74 E2B LiteRT-LM only · GPU+MTP
 
 on:
   push:
@@ -28,10 +27,8 @@ jobs:
       - uses: android-actions/setup-android@v3
       - name: Install Android SDK
         run: |
-          yes | sdkmanager \
-            "platforms;android-36" \
-            "build-tools;35.0.0" || true
-      - name: Apply Jinkaku source patches
+          yes | sdkmanager "platforms;android-36" "build-tools;35.0.0" || true
+      - name: Apply legacy source patches
         run: |
           python3 scripts/patch_cpu_speed_v022.py
           python3 scripts/patch_v024_thinking_idle_memory.py
@@ -45,19 +42,7 @@ jobs:
           python3 scripts/patch_v043_vivid_mix.py
           python3 scripts/patch_v046_finish.py
           python3 scripts/fix_v046_compile.py
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('scripts/patch_v047_ui_refine.py')
-          t = p.read_text(encoding='utf-8')
-          marker = "    text = replace_once(\n        text,\n        '''                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {"
-          s = t.find(marker)
-          if s >= 0:
-              e = t.find('    path.write_text', s)
-              if e < 0:
-                  raise RuntimeError('v047 path.write_text anchor not found')
-              t = t[:s] + '    text = text.replace(\'Text("Context window", fontWeight = FontWeight.SemiBold)\', \'Text("Context", fontWeight = FontWeight.SemiBold)\', 1)\n\n' + t[e:]
-              p.write_text(t, encoding='utf-8')
-          PY
+          python3 scripts/prepare_v047_ci.py
           python3 scripts/patch_v047_ui_refine.py
           python3 scripts/patch_v048_candy_glass.py
           python3 scripts/patch_v049_kawaii_glass.py
@@ -85,93 +70,11 @@ jobs:
           python3 scripts/fix_v073_e2b_selector_routing.py
           python3 scripts/fix_v074_e2b_thought_channel.py
           python3 scripts/fix_v076_e2b_gpu_mtp_fixed.py
-          # Later patches append UiState args after Temperature. Normalize the old v028
-          # anchor, and disable v077's destructive Thinking-block rewrite. E2B itself is
-          # still Thinking-OFF; keeping the existing Compose block intact avoids brace drift.
-          python3 - <<'PY'
-          from pathlib import Path
-          vm = Path('app/src/main/java/com/ikegami99/jinkaku/JinkakuViewModel.kt')
-          t = vm.read_text(encoding='utf-8')
-          old = '            temperature = prefs.getFloat("temperature", 1.0f).coerceIn(0.1f, 1.5f),\n'
-          if old in t:
-              t = t.replace(old, old[:-2] + '\n', 1)
-              vm.write_text(t, encoding='utf-8')
-
-          patch = Path('scripts/patch_v077_e2b_only.py')
-          p = patch.read_text(encoding='utf-8')
-          p = p.replace(
-              '    thinking_label = \'Text("Thinking", fontWeight = FontWeight.SemiBold)\'\n',
-              '    thinking_label = "__SKIP_DESTRUCTIVE_THINKING_REWRITE__"\n',
-              1,
-          )
-          patch.write_text(p, encoding='utf-8')
-          PY
+      - name: Convert generated app to E2B only
+        run: |
+          python3 scripts/prepare_v077_ci.py
           python3 scripts/patch_v077_e2b_only.py
-          # Final generated-source cleanup. The earlier E4B/E2B selector had a wrapper
-          # around its selector card; after removing the selector its closing brace becomes
-          # orphaned, so remove exactly that brace. Also make the remaining inference UI
-          # accurately describe the E2B-only runtime.
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
-
-          vm = Path('app/src/main/java/com/ikegami99/jinkaku/JinkakuViewModel.kt')
-          t = vm.read_text(encoding='utf-8')
-          t = t.replace(
-              '            topP = prefs.getFloat("top_p", 0.90f).coerceIn(0.05f, 1.0f)\n            webSearchMode =',
-              '            topP = prefs.getFloat("top_p", 0.90f).coerceIn(0.05f, 1.0f),\n            webSearchMode =',
-              1,
-          )
-          t = t.replace(
-              '    private val previousInferenceInterrupted = prefs.getBoolean(KEY_E4B_ACTIVE, false)\n',
-              '    private val previousInferenceInterrupted = false\n',
-              1,
-          )
-          t = re.sub(r'(?m)^[ \t]*prefs\.edit\(\)\.putBoolean\(KEY_E4B_ACTIVE, (?:true|false)\)\.commit\(\)\n', '', t)
-          vm.write_text(t, encoding='utf-8')
-
-          ui = Path('app/src/main/java/com/ikegami99/jinkaku/ui/ModernJinkakuApp.kt')
-          u = ui.read_text(encoding='utf-8')
-          orphan = '''        }
-
-        item {
-            ModernModelCard(
-                title = "Gemma 4 E2B LiteRT-LM",'''
-          fixed = '''        item {
-            ModernModelCard(
-                title = "Gemma 4 E2B LiteRT-LM",'''
-          if u.count(orphan) != 1:
-              raise RuntimeError(f'orphan selector brace: expected 1, got {u.count(orphan)}')
-          u = u.replace(orphan, fixed, 1)
-          u = u.replace('Text("Thinking", fontWeight = FontWeight.SemiBold)', 'Text("Thinking (E2BではOFF固定)", fontWeight = FontWeight.SemiBold)', 1)
-          u = u.replace(
-              'if (ui.thinkingEnabled) "内部Thinkingを使ってから回答" else "Thinkingを省略して直接回答"',
-              '"LiteRT-LMはThinkingを使わず直接回答"',
-              1,
-          )
-          u = u.replace(
-              'checked = ui.thinkingEnabled,\n                            onCheckedChange = vm::setThinkingEnabled,\n                            enabled = !ui.busy && !ui.e4bImporting',
-              'checked = false,\n                            onCheckedChange = null,\n                            enabled = false',
-              1,
-          )
-          u = u.replace(
-              'if (ui.thinkingEnabled) "Thinking内容は非表示です。" else "OFFではJinjaのenable_thinkingも無効化します。"',
-              '"GPU + MTPの高速経路を優先するためOFF固定です。"',
-              1,
-          )
-          u = u.replace('最新情報をE4Bの回答コンテキストへ追加します', '最新情報をE2Bの回答コンテキストへ追加します')
-          u = u.replace(
-              'Thinkingは別枠で最大512 token。返信の長さは回答本文だけに適用します。Context残量が少ない場合はThinking枠を縮めます。',
-              'E2BではThinking OFF固定。返信の長さは回答本文の最大token数です。',
-          )
-          ui.write_text(u, encoding='utf-8')
-          PY
-          echo '=== generated ViewModel state ==='
-          nl -ba app/src/main/java/com/ikegami99/jinkaku/JinkakuViewModel.kt | sed -n '90,125p'
-          echo '=== generated Models/Settings boundary ==='
-          nl -ba app/src/main/java/com/ikegami99/jinkaku/ui/ModernJinkakuApp.kt | sed -n '1545,1610p'
-          echo '=== remaining E4B references after final patch ==='
-          grep -nEi 'E4B|e4b' app/src/main/java/com/ikegami99/jinkaku/JinkakuViewModel.kt app/src/main/java/com/ikegami99/jinkaku/ui/ModernJinkakuApp.kt || true
+          python3 scripts/finalize_v077_ci.py
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
