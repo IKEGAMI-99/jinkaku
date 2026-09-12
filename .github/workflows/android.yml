@@ -107,11 +107,14 @@ jobs:
           patch.write_text(p, encoding='utf-8')
           PY
           python3 scripts/patch_v077_e2b_only.py
-          # The generated UiState still has web/reply fields after Top-P, so Top-P must
-          # retain a trailing comma. Also lock the old Thinking switch in the UI: E2B
-          # LiteRT-LM remains thinking-off by design.
+          # Final generated-source cleanup. The earlier E4B/E2B selector had a wrapper
+          # around its selector card; after removing the selector its closing brace becomes
+          # orphaned, so remove exactly that brace. Also make the remaining inference UI
+          # accurately describe the E2B-only runtime.
           python3 - <<'PY'
           from pathlib import Path
+          import re
+
           vm = Path('app/src/main/java/com/ikegami99/jinkaku/JinkakuViewModel.kt')
           t = vm.read_text(encoding='utf-8')
           t = t.replace(
@@ -119,17 +122,56 @@ jobs:
               '            topP = prefs.getFloat("top_p", 0.90f).coerceIn(0.05f, 1.0f),\n            webSearchMode =',
               1,
           )
+          t = t.replace(
+              '    private val previousInferenceInterrupted = prefs.getBoolean(KEY_E4B_ACTIVE, false)\n',
+              '    private val previousInferenceInterrupted = false\n',
+              1,
+          )
+          t = re.sub(r'(?m)^[ \t]*prefs\.edit\(\)\.putBoolean\(KEY_E4B_ACTIVE, (?:true|false)\)\.commit\(\)\n', '', t)
           vm.write_text(t, encoding='utf-8')
 
           ui = Path('app/src/main/java/com/ikegami99/jinkaku/ui/ModernJinkakuApp.kt')
           u = ui.read_text(encoding='utf-8')
+          orphan = '''        }
+
+        item {
+            ModernModelCard(
+                title = "Gemma 4 E2B LiteRT-LM",'''
+          fixed = '''        item {
+            ModernModelCard(
+                title = "Gemma 4 E2B LiteRT-LM",'''
+          if u.count(orphan) != 1:
+              raise RuntimeError(f'orphan selector brace: expected 1, got {u.count(orphan)}')
+          u = u.replace(orphan, fixed, 1)
           u = u.replace('Text("Thinking", fontWeight = FontWeight.SemiBold)', 'Text("Thinking (E2BではOFF固定)", fontWeight = FontWeight.SemiBold)', 1)
+          u = u.replace(
+              'if (ui.thinkingEnabled) "内部Thinkingを使ってから回答" else "Thinkingを省略して直接回答"',
+              '"LiteRT-LMはThinkingを使わず直接回答"',
+              1,
+          )
+          u = u.replace(
+              'checked = ui.thinkingEnabled,\n                            onCheckedChange = vm::setThinkingEnabled,\n                            enabled = !ui.busy && !ui.e4bImporting',
+              'checked = false,\n                            onCheckedChange = null,\n                            enabled = false',
+              1,
+          )
+          u = u.replace(
+              'if (ui.thinkingEnabled) "Thinking内容は非表示です。" else "OFFではJinjaのenable_thinkingも無効化します。"',
+              '"GPU + MTPの高速経路を優先するためOFF固定です。"',
+              1,
+          )
+          u = u.replace('最新情報をE4Bの回答コンテキストへ追加します', '最新情報をE2Bの回答コンテキストへ追加します')
+          u = u.replace(
+              'Thinkingは別枠で最大512 token。返信の長さは回答本文だけに適用します。Context残量が少ない場合はThinking枠を縮めます。',
+              'E2BではThinking OFF固定。返信の長さは回答本文の最大token数です。',
+          )
           ui.write_text(u, encoding='utf-8')
           PY
           echo '=== generated ViewModel state ==='
           nl -ba app/src/main/java/com/ikegami99/jinkaku/JinkakuViewModel.kt | sed -n '90,125p'
-          echo '=== generated Settings tail ==='
-          nl -ba app/src/main/java/com/ikegami99/jinkaku/ui/ModernJinkakuApp.kt | sed -n '1520,2040p'
+          echo '=== generated Models/Settings boundary ==='
+          nl -ba app/src/main/java/com/ikegami99/jinkaku/ui/ModernJinkakuApp.kt | sed -n '1545,1610p'
+          echo '=== remaining E4B references after final patch ==='
+          grep -nEi 'E4B|e4b' app/src/main/java/com/ikegami99/jinkaku/JinkakuViewModel.kt app/src/main/java/com/ikegami99/jinkaku/ui/ModernJinkakuApp.kt || true
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
