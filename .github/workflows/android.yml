@@ -25,9 +25,13 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: android-actions/setup-android@v3
-      - name: Install Android SDK
+      - name: Install Android SDK, NDK and CMake
         run: |
-          yes | sdkmanager "platforms;android-36" "build-tools;35.0.0" || true
+          yes | sdkmanager \
+            "platforms;android-36" \
+            "build-tools;35.0.0" \
+            "ndk;29.0.13113456" \
+            "cmake;3.31.6" || true
       - name: Apply legacy source patches
         run: |
           python3 scripts/patch_cpu_speed_v022.py
@@ -75,6 +79,7 @@ jobs:
           python3 scripts/prepare_v077_ci.py
           python3 scripts/patch_v077_e2b_only.py
           python3 scripts/finalize_v077_ci.py
+          python3 scripts/fix_v078_boot_thinking.py
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
@@ -104,5 +109,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="v${{ steps.prep.outputs.version }}-b${{ steps.prep.outputs.code }}"
-          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "Jinkaku v${{ steps.prep.outputs.version }} build ${{ steps.prep.outputs.code }}" --notes "Automated E2B LiteRT-LM release." --target "$GITHUB_SHA"
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "Jinkaku v${{ steps.prep.outputs.version }} build ${{ steps.prep.outputs.code }}" --notes "Automated E2B LiteRT-LM release with Thinking and EmbeddingGemma JNI." --target "$GITHUB_SHA"
           gh release upload "$TAG" "${{ steps.prep.outputs.apk }}" version.json --clobber
