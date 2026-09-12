@@ -86,25 +86,30 @@ jobs:
         with:
           gradle-version: '8.13'
       - name: Build CPU release APK
-        run: gradle --no-daemon :app:assembleRelease
+        env:
+          CI_VERSION_CODE: ${{ github.run_number }}
+        run: gradle --no-daemon :app:assembleRelease -PJINKAKU_VERSION_CODE="$CI_VERSION_CODE"
       - name: Prepare release files
         id: prep
         shell: bash
         run: |
           VERSION_NAME=$(grep '^JINKAKU_VERSION_NAME=' gradle.properties | cut -d= -f2)
-          VERSION_CODE=$(grep '^JINKAKU_VERSION_CODE=' gradle.properties | cut -d= -f2)
-          cp app/build/outputs/apk/release/app-release.apk "jinkaku-v${VERSION_NAME}.apk"
-          printf '{"versionName":"%s","versionCode":%s,"apk":"jinkaku-v%s.apk"}\n' "$VERSION_NAME" "$VERSION_CODE" "$VERSION_NAME" > version.json
+          VERSION_CODE="${GITHUB_RUN_NUMBER}"
+          APK_NAME="jinkaku-v${VERSION_NAME}-b${VERSION_CODE}.apk"
+          cp app/build/outputs/apk/release/app-release.apk "$APK_NAME"
+          printf '{"versionName":"%s","versionCode":%s,"apk":"%s"}\n' "$VERSION_NAME" "$VERSION_CODE" "$APK_NAME" > version.json
           echo "version=$VERSION_NAME" >> "$GITHUB_OUTPUT"
+          echo "code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
+          echo "apk=$APK_NAME" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
         with:
           name: jinkaku-apk
           path: jinkaku-v*.apk
-      - name: Create or update GitHub Release
+      - name: Create GitHub Release
         if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="v${{ steps.prep.outputs.version }}"
-          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "Jinkaku $TAG" --notes "Automated personal release." --target "$GITHUB_SHA"
-          gh release upload "$TAG" jinkaku-v*.apk version.json --clobber
+          TAG="v${{ steps.prep.outputs.version }}-b${{ steps.prep.outputs.code }}"
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "Jinkaku v${{ steps.prep.outputs.version }} build ${{ steps.prep.outputs.code }}" --notes "Automated personal release." --target "$GITHUB_SHA"
+          gh release upload "$TAG" "${{ steps.prep.outputs.apk }}" version.json --clobber
