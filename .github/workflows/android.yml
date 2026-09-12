@@ -1,5 +1,5 @@
 name: Android Release
-# v0.1.70 E2B selector and LiteRT routing fix
+# v0.1.71 E2B thought-channel visibility fix
 
 on:
   push:
@@ -85,6 +85,7 @@ jobs:
           python3 scripts/fix_v072_main_chat_patch.py
           python3 scripts/patch_v070_e2b_import_version.py
           python3 scripts/fix_v073_e2b_selector_routing.py
+          python3 scripts/fix_v074_e2b_thought_channel.py
       - name: Test separate generation budgets
         run: |
           g++ -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined tests/generation_budget_test.cpp -o /tmp/jinkaku-budget-test
