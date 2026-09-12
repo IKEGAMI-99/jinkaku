@@ -54,11 +54,44 @@ if route_start >= 0:
     text = text[:route_start] + text[route_end:]
     changed = True
 
+# 4) GenerationEvent.Completed is shared with E4B and requires elapsedMs.
+# Start the timer before Engine/prefill work so the E2B completion event carries the real
+# end-to-end latency instead of a dummy zero value.
+old_timer_anchor = '''        val maxContext = contextSize.toInt().coerceIn(MIN_CONTEXT_TOKENS, MAX_CONTEXT_TOKENS)
+        val outputLimit = maxGenerationTokens.coerceIn(32, MAX_OUTPUT_TOKENS)
+        val activeEngine = ensureEngine(model, maxContext)
+'''
+new_timer_anchor = '''        val maxContext = contextSize.toInt().coerceIn(MIN_CONTEXT_TOKENS, MAX_CONTEXT_TOKENS)
+        val outputLimit = maxGenerationTokens.coerceIn(32, MAX_OUTPUT_TOKENS)
+        val generationStartedAtMs = System.currentTimeMillis()
+        val activeEngine = ensureEngine(model, maxContext)
+'''
+if old_timer_anchor in text:
+    text = text.replace(old_timer_anchor, new_timer_anchor, 1)
+    changed = True
+
+old_completed = '        emit(GenerationEvent.Completed(clean))\n'
+new_completed = '''        emit(
+            GenerationEvent.Completed(
+                finalText = clean,
+                elapsedMs = System.currentTimeMillis() - generationStartedAtMs
+            )
+        )
+'''
+if old_completed in text:
+    text = text.replace(old_completed, new_completed, 1)
+    changed = True
+
 if not changed:
-    if "importE4B helper insertion anchor not found" in text and "normal ready status anchor not found" in text:
+    if (
+        "importE4B helper insertion anchor not found" in text
+        and "normal ready status anchor not found" in text
+        and "generationStartedAtMs" in text
+        and "elapsedMs = System.currentTimeMillis() - generationStartedAtMs" in text
+    ):
         print("V072 compatibility fixes already applied")
     else:
         raise RuntimeError("No V072 compatibility anchors changed")
 else:
     PATCH.write_text(text, encoding="utf-8")
-    print("Applied V072 fixes: first READY only + no obsolete V071 memory-router dependency")
+    print("Applied V072 fixes: routing compatibility + real E2B completion elapsedMs")
