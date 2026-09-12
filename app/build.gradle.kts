@@ -59,6 +59,13 @@ kotlin {
     }
 }
 
+configurations.configureEach {
+    resolutionStrategy.force(
+        "org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.11.0",
+        "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0",
+    )
+}
+
 dependencies {
     implementation(platform("androidx.compose:compose-bom:2025.12.00"))
     implementation("androidx.activity:activity-compose:1.12.2")
@@ -70,7 +77,8 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.10.0")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.10.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.10.0")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
-    implementation("com.google.ai.edge.litertlm:litertlm-android:0.16.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.11.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
+    implementation("com.google.ai.edge.litertlm:litertlm-android:0.17.0-alpha1")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
