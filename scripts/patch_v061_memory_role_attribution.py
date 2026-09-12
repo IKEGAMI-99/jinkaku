@@ -85,10 +85,51 @@ def patch_extractor() -> None:
         print(f"{marker} already applied to E2BMemoryEngine")
         return
 
-    old = '        private const val MEMORY_SYSTEM="""You are a local memory extraction worker. Do not chat and do not reveal reasoning. Extract only durable facts, preferences, project state, relationship facts, or episodes worth remembering. Ignore transient small talk. Return exactly one JSON object: {"memories":[{"content":"concise memory","type":"USER|SELF|RELATIONSHIP|EPISODIC|PREFERENCE|PROJECT","importance":"CORE|HIGH|NORMAL|LOW","confidence":"EXPLICIT|STRONG_INFERENCE|WEAK_INFERENCE","origin":"USER_EXPLICIT|USER_INFERRED|AI_SELF|SYSTEM|PROJECT","tags":["tag"]}]}. Use an empty memories array when nothing is worth storing."""\n'
-    new = '        // MEMORY_ROLE_EXTRACTION_V061: make the grammatical subject explicit so USER memories cannot be mistaken for assistant self-memory.\n        private const val MEMORY_SYSTEM="""You are a local memory extraction worker. Do not chat and do not reveal reasoning. Each input is explicitly a HUMAN USER message. Extract only durable facts, preferences, project state, relationship facts, or episodes worth remembering. Ignore transient small talk. Preserve the input language. Resolve pronouns before storing: when the human user says I / me / my / 私 / 僕 / 俺, write the memory with an explicit user subject such as The user... / ユーザーは..., never as first-person text. Use type SELF or origin AI_SELF only when the remembered fact is actually about Jinkaku/the assistant, not merely because the user spoke in first person. For facts or preferences about the human user, use type USER or PREFERENCE (or EPISODIC/PROJECT when appropriate) and origin USER_EXPLICIT or USER_INFERRED. Return exactly one JSON object: {"memories":[{"content":"concise memory with explicit subject","type":"USER|SELF|RELATIONSHIP|EPISODIC|PREFERENCE|PROJECT","importance":"CORE|HIGH|NORMAL|LOW","confidence":"EXPLICIT|STRONG_INFERENCE|WEAK_INFERENCE","origin":"USER_EXPLICIT|USER_INFERRED|AI_SELF|SYSTEM|PROJECT","tags":["tag"]}]}. Use an empty memories array when nothing is worth storing."""\n'
+    # E2B originally used a compact one-line declaration. The GPU/MTP LiteRT-LM
+    # implementation formats the same constant with spaces and a larger companion
+    # object. Patch by locating the Kotlin triple-quoted constant instead of relying
+    # on the exact old source line, so both runtimes remain supported.
+    anchors = (
+        'private const val MEMORY_SYSTEM = """',
+        'private const val MEMORY_SYSTEM="""',
+    )
+    start = -1
+    anchor = ""
+    for candidate in anchors:
+        start = text.find(candidate)
+        if start >= 0:
+            anchor = candidate
+            break
+    if start < 0:
+        raise RuntimeError("anchor not found: E2B MEMORY_SYSTEM constant")
 
-    text = one(text, old, new, "memory extractor ownership prompt")
+    body_start = start + len(anchor)
+    close = text.find('"""', body_start)
+    if close < 0:
+        raise RuntimeError("unterminated E2B MEMORY_SYSTEM constant")
+
+    line_start = text.rfind("\n", 0, start) + 1
+    indent = text[line_start:start]
+    prompt = (
+        "You are a local memory extraction worker. Do not chat and do not reveal reasoning. "
+        "Each input is explicitly a HUMAN USER message. Extract only durable facts, preferences, project state, "
+        "relationship facts, or episodes worth remembering. Ignore transient small talk. Preserve the input language. "
+        "Resolve pronouns before storing: when the human user says I / me / my / 私 / 僕 / 俺, write the memory with "
+        "an explicit user subject such as The user... / ユーザーは..., never as first-person text. Use type SELF or "
+        "origin AI_SELF only when the remembered fact is actually about Jinkaku/the assistant, not merely because the "
+        "user spoke in first person. For facts or preferences about the human user, use type USER or PREFERENCE "
+        "(or EPISODIC/PROJECT when appropriate) and origin USER_EXPLICIT or USER_INFERRED. Return exactly one JSON "
+        "object: {\"memories\":[{\"content\":\"concise memory with explicit subject\",\"type\":\"USER|SELF|RELATIONSHIP|EPISODIC|PREFERENCE|PROJECT\","
+        "\"importance\":\"CORE|HIGH|NORMAL|LOW\",\"confidence\":\"EXPLICIT|STRONG_INFERENCE|WEAK_INFERENCE\","
+        "\"origin\":\"USER_EXPLICIT|USER_INFERRED|AI_SELF|SYSTEM|PROJECT\",\"tags\":[\"tag\"]}]}. "
+        "Use an empty memories array when nothing is worth storing."
+    )
+
+    replacement = (
+        f'{indent}// {marker}: make the grammatical subject explicit so USER memories cannot be mistaken for assistant self-memory.\n'
+        f'{indent}private const val MEMORY_SYSTEM = """{prompt}"""'
+    )
+    text = text[:line_start] + replacement + text[close + 3:]
     E2B.write_text(text, encoding="utf-8")
     print("Applied MEMORY_ROLE_EXTRACTION_V061 to E2BMemoryEngine")
 
