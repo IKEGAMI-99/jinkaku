@@ -85,6 +85,17 @@ jobs:
           python3 scripts/fix_v073_e2b_selector_routing.py
           python3 scripts/fix_v074_e2b_thought_channel.py
           python3 scripts/fix_v076_e2b_gpu_mtp_fixed.py
+          # v062/v067 append more UiState arguments after Temperature, so normalize
+          # the old v028 anchor before the final E2B-only consolidation patch.
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('app/src/main/java/com/ikegami99/jinkaku/JinkakuViewModel.kt')
+          t = p.read_text(encoding='utf-8')
+          old = '            temperature = prefs.getFloat("temperature", 1.0f).coerceIn(0.1f, 1.5f),\n'
+          if old in t:
+              t = t.replace(old, old[:-2] + '\n', 1)
+              p.write_text(t, encoding='utf-8')
+          PY
           python3 scripts/patch_v077_e2b_only.py
       - uses: gradle/actions/setup-gradle@v4
         with:
