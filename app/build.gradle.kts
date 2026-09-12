@@ -12,7 +12,6 @@ val versionCodeProp = providers.gradleProperty("JINKAKU_VERSION_CODE").getOrElse
 android {
     namespace = "com.ikegami99.jinkaku"
     compileSdk = 36
-    ndkVersion = "29.0.13113456"
 
     defaultConfig {
         applicationId = "com.ikegami99.jinkaku"
@@ -20,15 +19,8 @@ android {
         targetSdk = 36
         versionCode = versionCodeProp
         versionName = versionNameProp
+        // Jinkaku is intentionally arm64-only. LiteRT-LM supplies its own native runtime.
         ndk { abiFilters += listOf("arm64-v8a") }
-        externalNativeBuild {
-            cmake {
-                arguments += listOf(
-                    "-DCMAKE_BUILD_TYPE=Release",
-                    "-DANDROID_STL=c++_shared"
-                )
-            }
-        }
     }
     signingConfigs {
         create("release") {
@@ -44,12 +36,6 @@ android {
     }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     buildFeatures { compose = true; buildConfig = true }
-    externalNativeBuild {
-        cmake {
-            path = file("src/main/cpp/CMakeLists.txt")
-            version = "3.31.6"
-        }
-    }
     packaging { jniLibs.useLegacyPackaging = true; resources.excludes += setOf("/META-INF/{AL2.0,LGPL2.1}") }
 }
 
