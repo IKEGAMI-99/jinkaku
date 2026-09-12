@@ -78,6 +78,7 @@ jobs:
           python3 scripts/patch_v067_reply_style.py
           python3 scripts/patch_v068_settings_categories.py
           python3 scripts/patch_v069_thinking_budget.py
+          python3 scripts/patch_v070_e2b_import_version.py
       - name: Test separate generation budgets
         run: |
           g++ -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined tests/generation_budget_test.cpp -o /tmp/jinkaku-budget-test
