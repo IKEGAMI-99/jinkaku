@@ -1,5 +1,5 @@
 name: Android Release
-# v0.1.69 Separate Thinking and answer budgets
+# v0.1.70 E2B selector and LiteRT routing fix
 
 on:
   push:
@@ -84,6 +84,7 @@ jobs:
           python3 scripts/patch_v069_thinking_budget.py
           python3 scripts/fix_v072_main_chat_patch.py
           python3 scripts/patch_v070_e2b_import_version.py
+          python3 scripts/fix_v073_e2b_selector_routing.py
       - name: Test separate generation budgets
         run: |
           g++ -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined tests/generation_budget_test.cpp -o /tmp/jinkaku-budget-test
