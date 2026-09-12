@@ -1,5 +1,5 @@
 name: Android Release
-# v0.1.73 E2B GPU+MTP fixed runtime policy
+# v0.1.74 E2B LiteRT-LM only · GPU+MTP
 
 on:
   push:
@@ -26,14 +26,12 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: android-actions/setup-android@v3
-      - name: Install Android SDK, NDK and CMake
+      - name: Install Android SDK
         run: |
           yes | sdkmanager \
             "platforms;android-36" \
-            "build-tools;35.0.0" \
-            "ndk;29.0.13113456" \
-            "cmake;3.31.6" || true
-      - name: Apply CPU runtime patches
+            "build-tools;35.0.0" || true
+      - name: Apply Jinkaku source patches
         run: |
           python3 scripts/patch_cpu_speed_v022.py
           python3 scripts/patch_v024_thinking_idle_memory.py
@@ -87,14 +85,11 @@ jobs:
           python3 scripts/fix_v073_e2b_selector_routing.py
           python3 scripts/fix_v074_e2b_thought_channel.py
           python3 scripts/fix_v076_e2b_gpu_mtp_fixed.py
-      - name: Test separate generation budgets
-        run: |
-          g++ -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined tests/generation_budget_test.cpp -o /tmp/jinkaku-budget-test
-          /tmp/jinkaku-budget-test
+          python3 scripts/patch_v077_e2b_only.py
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
-      - name: Build CPU release APK
+      - name: Build E2B LiteRT-LM release APK
         env:
           CI_VERSION_CODE: ${{ github.run_number }}
         run: gradle --no-daemon :app:assembleRelease -PJINKAKU_VERSION_CODE="$CI_VERSION_CODE"
@@ -120,5 +115,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="v${{ steps.prep.outputs.version }}-b${{ steps.prep.outputs.code }}"
-          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "Jinkaku v${{ steps.prep.outputs.version }} build ${{ steps.prep.outputs.code }}" --notes "Automated personal release." --target "$GITHUB_SHA"
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "Jinkaku v${{ steps.prep.outputs.version }} build ${{ steps.prep.outputs.code }}" --notes "Automated E2B LiteRT-LM release." --target "$GITHUB_SHA"
           gh release upload "$TAG" "${{ steps.prep.outputs.apk }}" version.json --clobber
