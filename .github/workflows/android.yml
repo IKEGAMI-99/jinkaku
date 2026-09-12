@@ -1,5 +1,5 @@
 name: Android Release
-# v0.1.68 Collapsible settings categories + simplified chat header
+# v0.1.69 Separate Thinking and answer budgets
 
 on:
   push:
@@ -77,6 +77,11 @@ jobs:
           python3 scripts/patch_v066_random_persona.py
           python3 scripts/patch_v067_reply_style.py
           python3 scripts/patch_v068_settings_categories.py
+          python3 scripts/patch_v069_thinking_budget.py
+      - name: Test separate generation budgets
+        run: |
+          g++ -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined tests/generation_budget_test.cpp -o /tmp/jinkaku-budget-test
+          /tmp/jinkaku-budget-test
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
