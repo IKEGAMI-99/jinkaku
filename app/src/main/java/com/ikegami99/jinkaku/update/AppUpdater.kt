@@ -258,6 +258,16 @@ class AppUpdater(private val context: Context, private val logger: AppLogger) {
         prefs.edit().remove("id").apply()
     }
 
+    fun hasDownloadedUpdate(): Boolean {
+        val path = context.getSharedPreferences("update", Context.MODE_PRIVATE)
+            .getString("path", null) ?: return false
+        val file = File(path)
+        return runCatching {
+            validateApk(file)
+            true
+        }.getOrDefault(false)
+    }
+
     fun installDownloaded(): Boolean {
         val prefs = context.getSharedPreferences("update", Context.MODE_PRIVATE)
         val path = prefs.getString("path", null) ?: return false
