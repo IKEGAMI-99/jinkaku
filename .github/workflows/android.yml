@@ -83,6 +83,8 @@ jobs:
           python3 scripts/patch_v079_telemetry_context8k.py
           python3 scripts/patch_v080_live_feedback.py
           python3 scripts/patch_v081_settings_help_updater.py
+          python3 scripts/patch_v082_super_menhera.py
+          python3 scripts/fix_v082_super_menhera_compile.py
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
@@ -112,5 +114,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="v${{ steps.prep.outputs.version }}-b${{ steps.prep.outputs.code }}"
-          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "Jinkaku v${{ steps.prep.outputs.version }} build ${{ steps.prep.outputs.code }}" --notes "Settings help guide, resilient resumable in-app updater, update progress UI, plus the existing E2B LiteRT-LM GPU+MTP runtime." --target "$GITHUB_SHA"
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "Jinkaku v${{ steps.prep.outputs.version }} build ${{ steps.prep.outputs.code }}" --notes "Adds the isolated 100-turn Super Menhera game mode with RAM-only session memory, dedicated persona, clear/fail results, plus the existing E2B LiteRT-LM GPU+MTP runtime." --target "$GITHUB_SHA"
           gh release upload "$TAG" "${{ steps.prep.outputs.apk }}" version.json --clobber
