@@ -105,7 +105,9 @@ def patch_ui() -> None:
     if "SETTINGS_CATEGORIES_V068" not in text:
         raise RuntimeError("categorized Settings UI must exist before v081")
 
-    settings_start = text.index("@Composable\nprivate fun ModernSettingsScreen(")
+    # Later patches insert their own marker comments between @Composable and the
+    # Settings function. Anchor on the function itself so v081 survives those changes.
+    settings_start = text.index("private fun ModernSettingsScreen(")
     settings_end = text.index("\n@Composable\nprivate fun ModernSettingsCategoryHeader(", settings_start)
     settings = text[settings_start:settings_end]
 
