@@ -84,6 +84,7 @@ jobs:
           python3 scripts/patch_v080_live_feedback.py
           python3 scripts/patch_v081_settings_help_updater.py
           python3 scripts/patch_v082_super_menhera.py
+          python3 scripts/fix_v082_super_menhera_compile.py
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
