@@ -19,21 +19,29 @@ def patch_view_model() -> None:
         print(f"{MARKER} already applied to ViewModel")
         return
 
+    # v046 already added Int percentage/downloading/ready fields. Keep that public UI
+    # shape, but stop polling the old DownloadManager job because v081 owns the transfer.
     text = one(
         text,
-        "    val updateInfo: UpdateInfo? = null\n",
-        "    val updateInfo: UpdateInfo? = null,\n"
-        "    val updateDownloading: Boolean = false,\n"
-        "    val updateDownloadProgress: Float? = null,\n"
-        "    val updateReadyToInstall: Boolean = false\n",
-        "update UI state",
+        "        val updateDownload = updater.downloadState()\n",
+        "        // SETTINGS_HELP_UPDATER_V081: app-owned transfer; no legacy DownloadManager polling.\n",
+        "legacy update download poll",
     )
+    old_refresh_fields = '''            embeddingEngineName = memory.embeddingName,
+            updateDownloadProgress = updateDownload?.progressPercent,
+            updateDownloading = updateDownload?.downloading == true,
+            updateDownloadReady = updateDownload?.complete == true
+'''
+    new_refresh_fields = '''            embeddingEngineName = memory.embeddingName,
+            updateDownloadReady = if (_ui.value.updateDownloading) _ui.value.updateDownloadReady else updater.hasDownloadedUpdate()
+'''
+    text = one(text, old_refresh_fields, new_refresh_fields, "legacy update refresh fields")
 
     update_pattern = re.compile(
         r'''    fun downloadUpdate\(\) \{.*?^    fun installUpdate\(\) \{[^\n]*\}\n''',
         re.S | re.M,
     )
-    replacement = '''    // SETTINGS_HELP_UPDATER_V081: app-owned update download with progress + retry.
+    replacement = '''    // SETTINGS_HELP_UPDATER_V081: resumable app-owned update download with live progress.
     fun downloadUpdate() {
         val info = _ui.value.updateInfo ?: run {
             setError("先に更新を確認してください")
@@ -44,20 +52,21 @@ def patch_view_model() -> None:
         viewModelScope.launch {
             _ui.value = _ui.value.copy(
                 updateDownloading = true,
-                updateDownloadProgress = 0f,
-                updateReadyToInstall = false,
+                updateDownloadProgress = 0,
+                updateDownloadReady = false,
                 error = null,
-                notice = null
+                notice = "更新APKをダウンロードしています"
             )
             runCatching {
                 updater.download(info) { progress ->
-                    _ui.value = _ui.value.copy(updateDownloadProgress = progress)
+                    val percent = progress?.let { (it.coerceIn(0f, 1f) * 100f).toInt().coerceIn(0, 99) }
+                    _ui.value = _ui.value.copy(updateDownloadProgress = percent)
                 }
             }.onSuccess {
                 _ui.value = _ui.value.copy(
                     updateDownloading = false,
-                    updateDownloadProgress = 1f,
-                    updateReadyToInstall = true,
+                    updateDownloadProgress = 100,
+                    updateDownloadReady = true,
                     notice = "更新APKを取得しました。「インストール」を押してください"
                 )
             }.onFailure { error ->
@@ -65,7 +74,7 @@ def patch_view_model() -> None:
                 _ui.value = _ui.value.copy(
                     updateDownloading = false,
                     updateDownloadProgress = null,
-                    updateReadyToInstall = false,
+                    updateDownloadReady = updater.hasDownloadedUpdate(),
                     error = "更新APKの取得に失敗しました: ${error.message ?: "不明なエラー"}"
                 )
             }
@@ -109,60 +118,13 @@ def patch_ui() -> None:
         1,
     )
 
-    download_button = '''                        OutlinedButton(onClick = vm::downloadUpdate, modifier = Modifier.fillMaxWidth()) {
-                            Icon(Icons.Rounded.Download, null, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("APKを取得")
-                        }
-'''
-    download_replacement = '''                        OutlinedButton(
-                            onClick = vm::downloadUpdate,
-                            enabled = !ui.updateDownloading,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Icon(Icons.Rounded.Download, null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text(if (ui.updateDownloading) "ダウンロード中" else "APKを取得")
-                        }
-'''
-    if download_button not in settings:
-        raise RuntimeError("update download button anchor not found")
-    settings = settings.replace(download_button, download_replacement, 1)
-
-    install_button = '''                    OutlinedButton(onClick = vm::installUpdate, modifier = Modifier.fillMaxWidth()) {
-                        Icon(Icons.Rounded.SystemUpdate, null, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("インストール")
-                    }
-'''
-    install_replacement = '''                    if (ui.updateDownloading || ui.updateDownloadProgress != null) {
-                        val progress = ui.updateDownloadProgress
-                        if (progress != null) {
-                            LinearProgressIndicator(
-                                progress = { progress.coerceIn(0f, 1f) },
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                            Text(
-                                "${(progress.coerceIn(0f, 1f) * 100).toInt()}%  ·  途中で通信が切れても自動再開します",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        } else {
-                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                            Text(
-                                "APKを取得中… サイズ確認後に進捗を表示します",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                    OutlinedButton(
-                        onClick = vm::installUpdate,
-                        enabled = !ui.updateDownloading,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(Icons.Rounded.SystemUpdate, null, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("インストール")
-                    }
-'''
-    if install_button not in settings:
-        raise RuntimeError("update install button anchor not found")
-    settings = settings.replace(install_button, install_replacement, 1)
+    # v046 already renders percentage and disables Install until the APK is complete.
+    # Add a small recovery hint so a stalled connection no longer looks terminal.
+    settings = settings.replace(
+        'if (ui.updateDownloading) "ダウンロード $updateProgress%" else "ダウンロード完了 $updateProgress%",',
+        'if (ui.updateDownloading) "ダウンロード $updateProgress%  ·  通信切断時は自動再開" else "ダウンロード完了 $updateProgress%",',
+        1,
+    )
 
     text = text[:settings_start] + settings + text[settings_end:]
 
@@ -203,7 +165,7 @@ private fun JinkakuUsageGuide() {
 
             JinkakuGuideStep(
                 "1  モデルを入れる",
-                "「モデル」カテゴリで E2B LiteRT-LM を選び、ダウンロードするか「端末から読み込み」で gemma-4-E2B-it.litertlm を指定します。JinkakuのメインチャットはE2B LiteRT-LMをGPU + MTPで使います。"
+                "「モデル」カテゴリで E2B LiteRT-LM をダウンロードするか、「端末から読み込み」で gemma-4-E2B-it.litertlm を指定します。メインチャットはE2B LiteRT-LMをGPU + MTPで使います。"
             )
             JinkakuGuideStep(
                 "2  Personaを作る",
@@ -211,7 +173,7 @@ private fun JinkakuUsageGuide() {
             )
             JinkakuGuideStep(
                 "3  Memoryを使う",
-                "左メニューの「Memory」で長期記憶を確認できます。「Memory追加」で手動登録も可能です。会話中の情報はMemory機能が整理し、次の会話で必要な記憶だけ参照します。"
+                "左メニューの「Memory」で長期記憶を確認できます。「Memory追加」で手動登録も可能です。会話から作られた記憶は、必要なときだけ次の会話へ参照されます。"
             )
             JinkakuGuideStep(
                 "4  推論を調整する",
