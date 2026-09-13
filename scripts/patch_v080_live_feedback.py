@@ -19,13 +19,6 @@ def patch_ui() -> None:
         print(f"{MARKER} already applied to UI")
         return
 
-    if "import androidx.compose.animation.core.animateFloatAsState\n" not in text:
-        text = one(
-            text,
-            "import android.content.Intent\n",
-            "import android.content.Intent\nimport androidx.compose.animation.core.animateFloatAsState\n",
-            "animateFloatAsState import",
-        )
     if "import kotlinx.coroutines.delay\n" not in text:
         text = one(
             text,
@@ -45,6 +38,7 @@ def patch_ui() -> None:
     if count != 1:
         raise RuntimeError(f"typing label function: expected exactly one match, found {count}")
 
+    # Header/status ticker. This anchor is stable across the generated UI patches.
     top_anchor = "    val keyboard = LocalSoftwareKeyboardController.current\n\n    fun dismissIme() {"
     top_replacement = '''    val keyboard = LocalSoftwareKeyboardController.current
     var typingTick by remember { mutableStateOf(0) }
@@ -63,56 +57,35 @@ def patch_ui() -> None:
     fun dismissIme() {'''
     text = one(text, top_anchor, top_replacement, "top-bar typing ticker")
 
-    chat_anchor = '''    val listState = rememberLazyListState()
-    val showTypingBubble = ui.busy && telemetry.phase in setOf("PREFILL", "THINKING", "DECODE")
-
-    fun submit() {'''
-    chat_replacement = '''    val listState = rememberLazyListState()
-    val showTypingBubble = ui.busy && telemetry.phase in setOf("PREFILL", "THINKING", "DECODE")
-    var typingTick by remember { mutableStateOf(0) }
-
-    LaunchedEffect(showTypingBubble) {
-        if (!showTypingBubble) {
-            typingTick = 0
-            return@LaunchedEffect
-        }
-        while (true) {
-            delay(360L)
-            typingTick = (typingTick + 1) % 3
-        }
-    }
-
-    fun submit() {'''
-    text = one(text, chat_anchor, chat_replacement, "chat typing ticker")
+    # Earlier visual patches change the lines around this declaration, so insert by
+    # the declaration itself rather than assuming the surrounding source is unchanged.
+    chat_match = re.search(r'(?m)^(\s*)val showTypingBubble = [^\n]+\n', text)
+    if chat_match is None:
+        raise RuntimeError("chat typing ticker: showTypingBubble declaration not found")
+    indent = chat_match.group(1)
+    chat_ticker = (
+        chat_match.group(0)
+        + f'{indent}var typingTick by remember {{ mutableStateOf(0) }}\n\n'
+        + f'{indent}LaunchedEffect(showTypingBubble) {{\n'
+        + f'{indent}    if (!showTypingBubble) {{\n'
+        + f'{indent}        typingTick = 0\n'
+        + f'{indent}        return@LaunchedEffect\n'
+        + f'{indent}    }}\n'
+        + f'{indent}    while (true) {{\n'
+        + f'{indent}        delay(360L)\n'
+        + f'{indent}        typingTick = (typingTick + 1) % 3\n'
+        + f'{indent}    }}\n'
+        + f'{indent}}}\n'
+    )
+    text = text[:chat_match.start()] + chat_ticker + text[chat_match.end():]
 
     typing_calls = text.count("modernTypingLabel(telemetry.generatedTokens)")
-    if typing_calls < 2:
-        raise RuntimeError(f"typing label calls: expected at least 2, found {typing_calls}")
+    if typing_calls < 1:
+        raise RuntimeError("typing label calls: telemetry.generatedTokens call not found")
     text = text.replace("modernTypingLabel(telemetry.generatedTokens)", "modernTypingLabel(typingTick)")
 
-    context_anchor = '''    val remaining = (max - used).coerceAtLeast(0)
-    val fraction = if (max > 0) used.toFloat() / max else 0f
-
-    Card('''
-    context_replacement = '''    val remaining = (max - used).coerceAtLeast(0)
-    val fraction = if (max > 0) used.toFloat() / max else 0f
-    val animatedFraction by animateFloatAsState(
-        targetValue = fraction.coerceIn(0f, 1f),
-        label = "contextMeter"
-    )
-
-    Card('''
-    text = one(text, context_anchor, context_replacement, "context progress animation")
-
-    text = one(
-        text,
-        "                progress = { fraction.coerceIn(0f, 1f) },",
-        "                progress = { animatedFraction },",
-        "context progress value",
-    )
-
     UI.write_text(text, encoding="utf-8")
-    print("Applied V080 UI: independent animated ellipsis + smooth live context meter")
+    print("Applied V080 UI: independent animated ellipsis")
 
 
 def patch_engine() -> None:
@@ -174,9 +147,11 @@ def patch_engine() -> None:
                                 ?.coerceIn(0, maxContext)
                                 ?: 0
 
-                            // LiteRT-LM may keep getTokenCount() unchanged while sendMessageAsync
-                            // owns the conversation. Keep the UI alive with a conservative estimate,
-                            // then replace it with the exact count once LiteRT exposes it.
+                            // LiteRT-LM can leave getTokenCount() unchanged while
+                            // sendMessageAsync owns the conversation. Prefer the real
+                            // count whenever it advances, otherwise keep the UI moving
+                            // with a conservative estimate. The exact count replaces it
+                            // immediately after generation completes.
                             val fallbackStep = (
                                 LIVE_CONTEXT_FALLBACK_TOK_S * TELEMETRY_INTERVAL_MS / 1000.0
                             ).toInt().coerceAtLeast(1)
@@ -198,19 +173,9 @@ def patch_engine() -> None:
                     }'''
     text = one(text, monitor_anchor, monitor_replacement, "live telemetry monitor")
 
-    helper_anchor = '''    private fun normalizeForSimilarity(value: String): String =
-        value.lowercase()
-            .replace(Regex("[\\\\s\\\\p{Punct}。、！？「」『』（）［］【】…・]+"), "")
-            .take(1200)
-
-    @Synchronized'''
-    helper_replacement = '''    private fun normalizeForSimilarity(value: String): String =
-        value.lowercase()
-            .replace(Regex("[\\\\s\\\\p{Punct}。、！？「」『』（）［］【】…・]+"), "")
-            .take(1200)
-
-    // Fast UI-only estimate. Japanese/CJK characters are counted roughly one token
-    // each, while ASCII runs use ~4 chars/token. The exact LiteRT count wins at end.
+    ensure_anchor = "    @Synchronized\n    private fun ensureEngine(model: File, maxContext: Int): Engine {"
+    helper = '''    // Fast UI-only estimate. CJK characters are counted roughly one token
+    // each; ASCII runs use about four chars/token. Exact LiteRT count wins at end.
     private fun estimateTokenCount(value: String): Int {
         var tokens = 0
         var asciiRun = 0
@@ -236,8 +201,9 @@ def patch_engine() -> None:
         return tokens.coerceAtLeast(1)
     }
 
-    @Synchronized'''
-    text = one(text, helper_anchor, helper_replacement, "token estimate helper")
+    @Synchronized
+    private fun ensureEngine(model: File, maxContext: Int): Engine {'''
+    text = one(text, ensure_anchor, helper, "token estimate helper")
 
     constants_anchor = '''        private const val REPEAT_SIMILARITY_THRESHOLD = 0.72
         private const val TELEMETRY_INTERVAL_MS = 400L
