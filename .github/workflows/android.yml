@@ -87,6 +87,7 @@ jobs:
           python3 scripts/fix_v082_super_menhera_compile.py
           python3 scripts/patch_v083_menhera_intelligence.py
           python3 scripts/patch_v084_menhera_emotion.py
+          python3 scripts/patch_v085_menhera_antiloop.py
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
@@ -116,5 +117,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="v${{ steps.prep.outputs.version }}-b${{ steps.prep.outputs.code }}"
-          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "Jinkaku v${{ steps.prep.outputs.version }} build ${{ steps.prep.outputs.code }}" --notes "Makes Super Menhera emotionally expressive while keeping Thinking and deep temporary context. Internal reasoning stays smart; visible replies are shorter, colloquial, reactive, and less academic." --target "$GITHUB_SHA"
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "Jinkaku v${{ steps.prep.outputs.version }} build ${{ steps.prep.outputs.code }}" --notes "Adds anti-loop dialogue progression to Super Menhera. Recent assistant replies are explicitly avoided, short user questions are no longer mirrored back, and every reply must introduce a new emotional or conversational delta while keeping Thinking enabled." --target "$GITHUB_SHA"
           gh release upload "$TAG" "${{ steps.prep.outputs.apk }}" version.json --clobber
