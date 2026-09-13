@@ -88,6 +88,7 @@ jobs:
           python3 scripts/patch_v083_menhera_intelligence.py
           python3 scripts/patch_v084_menhera_emotion.py
           python3 scripts/patch_v085_menhera_antiloop.py
+          python3 scripts/fix_v085_compile.py
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
