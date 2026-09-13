@@ -19,8 +19,6 @@ def patch_game() -> None:
         print(f"{MARKER} already applied to game")
         return
 
-    # Give the model an explicit short blacklist of its own recent answers. The history alone was
-    # not enough for E2B to notice that it was paraphrasing itself every turn.
     old_memory_tail = '''            .joinToString("\\n") { "- $it" }
             .ifBlank { "(none yet)" }
 
@@ -71,8 +69,6 @@ $recentAssistantAvoid
 $endingInstruction'''
     text = one(text, old_session_block, new_session_block, "anti-loop prompt context")
 
-    # Hard guard: catch near-verbatim loops even if the model ignores the prompt. Japanese text is
-    # compared with character trigrams, avoiding a tokenizer dependency.
     helper_anchor = '''    /**
      * Converts only this game's temporary transcript to inference history. No normal chat rows are read.
      */
@@ -85,7 +81,6 @@ $endingInstruction'''
         if (candidateGrams.isEmpty()) return false
 
         return state.messages
-            .asSequence()
             .filter { it.role == ROLE_ASSISTANT }
             .takeLast(3)
             .map { normalizeLoopText(it.content) }
@@ -195,7 +190,7 @@ Write a genuinely different reply. Do not paraphrase the rejected draft. Move th
 def main() -> None:
     patch_game()
     patch_vm()
-    print(f"Applied v085 anti-loop guard")
+    print("Applied v085 anti-loop guard")
 
 
 if __name__ == "__main__":
