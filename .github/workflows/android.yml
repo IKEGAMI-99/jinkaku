@@ -86,6 +86,7 @@ jobs:
           python3 scripts/patch_v082_super_menhera.py
           python3 scripts/fix_v082_super_menhera_compile.py
           python3 scripts/patch_v083_menhera_intelligence.py
+          python3 scripts/patch_v084_menhera_emotion.py
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
@@ -115,5 +116,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="v${{ steps.prep.outputs.version }}-b${{ steps.prep.outputs.code }}"
-          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "Jinkaku v${{ steps.prep.outputs.version }} build ${{ steps.prep.outputs.code }}" --notes "Improves Super Menhera dialogue quality with Thinking ON, deeper temporary context, lower-temperature generation, contradiction tracking, and less repetitive character behavior." --target "$GITHUB_SHA"
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "Jinkaku v${{ steps.prep.outputs.version }} build ${{ steps.prep.outputs.code }}" --notes "Makes Super Menhera emotionally expressive while keeping Thinking and deep temporary context. Internal reasoning stays smart; visible replies are shorter, colloquial, reactive, and less academic." --target "$GITHUB_SHA"
           gh release upload "$TAG" "${{ steps.prep.outputs.apk }}" version.json --clobber
