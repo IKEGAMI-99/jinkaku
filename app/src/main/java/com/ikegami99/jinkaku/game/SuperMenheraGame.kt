@@ -179,7 +179,6 @@ class SuperMenheraGameSession {
             else -> "HORROR"
         }
         val sessionMemory = s.messages
-            .asSequence()
             .filter { it.role == ROLE_USER }
             .map { it.content.replace(Regex("\\s+"), " ").trim().take(120) }
             .filter { it.isNotBlank() }
