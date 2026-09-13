@@ -81,6 +81,7 @@ jobs:
           python3 scripts/finalize_v077_ci.py
           python3 scripts/fix_v078_boot_thinking.py
           python3 scripts/patch_v079_telemetry_context8k.py
+          python3 scripts/patch_v080_live_feedback.py
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
@@ -110,5 +111,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="v${{ steps.prep.outputs.version }}-b${{ steps.prep.outputs.code }}"
-          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "Jinkaku v${{ steps.prep.outputs.version }} build ${{ steps.prep.outputs.code }}" --notes "E2B LiteRT-LM: Thinking, live context meter, TTFT/Prefill/Decode telemetry, restored model settings, and 8K context." --target "$GITHUB_SHA"
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "Jinkaku v${{ steps.prep.outputs.version }} build ${{ steps.prep.outputs.code }}" --notes "E2B LiteRT-LM: Thinking, live context meter, animated writing indicator, TTFT/Prefill/Decode telemetry, restored model settings, and 8K context." --target "$GITHUB_SHA"
           gh release upload "$TAG" "${{ steps.prep.outputs.apk }}" version.json --clobber
