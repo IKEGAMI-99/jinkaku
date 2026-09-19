@@ -6,6 +6,8 @@
 
 Current release: **v0.1.82 build 352**
 
+AI / coding agents: start with **[AGENTS.md](AGENTS.md)** before analyzing or modifying the repository.
+
 > JINKAKU は「高度な調べ物をするクラウドAI」よりも、端末内で自然に会話を続け、人格と記憶を持たせることを重視した個人向けプロジェクトです。
 
 ## 主な機能
