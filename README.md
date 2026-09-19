@@ -1,53 +1,238 @@
-# Jinkaku
+# JINKAKU
 
-完全ローカルを基本としたAndroid人格AIです。メイン会話は **HauhauCS Gemma 4 E4B Uncensored GGUF**、長期記憶の抽出・整理は **Gemma 4 E2B LiteRT-LM** が担当します。
+**ローカル推論を中心に、人格・長期記憶・自発会話を組み合わせた Android 向け人格AI。**
 
-Chat / Codexで変更を引き継ぐ場合は、[変更・ワードマーク差し替え手順](docs/CHAT_HANDOFF.md) を参照してください。
-ビルド時のPythonパッチ、編集対象、画像変換、GitHubへの反映、検証・更新配布の手順をまとめています。
+現在の通常チャットは **Gemma 4 E2B LiteRT-LM / GPU + MTP** を使用します。会話、Persona、Memory は基本的に端末内で処理・保存し、必要なときだけモデル取得、アプリ更新、任意のWeb検索で外部通信します。
 
-## v0.1.0 MVP
+Current release: **v0.1.82 build 352**
 
-- E4B Q4_K_M GGUFをアプリからダウンロードしてローカル推論
-- Thinking/CoTは内部で使用し、通常UIや会話DBには保存・表示しない
-- E2B LiteRT-LMを会話中は常駐させず、アイドル時にMemory候補を抽出
-- User / Self / Relationship / Episodic / Preference / Project Memory用SQLite DB
-- 256次元Hashing Embedding + keyword/entity hybrid retrieval
-- Context 4K / 8K / 16K / 32K切替（初期8K）
-- GitHub Releasesからアプリ内更新
-- 常時追記・flush/sync付きログエクスポート。0 byteログを禁止
-- SQLite WAL checkpoint付きバックアップ
-- Android Auto Backup / device transferからアプリデータを除外
+> JINKAKU は「高度な調べ物をするクラウドAI」よりも、端末内で自然に会話を続け、人格と記憶を持たせることを重視した個人向けプロジェクトです。
+
+## 主な機能
+
+### ローカルチャット
+- Gemma 4 E2B LiteRT-LM をメインチャットに使用
+- LiteRT-LM の **GPU + MTP 固定**ランタイム
+- Context は最大 **8K**
+- Thinking ON / OFF
+- Context量に応じたThinking budget
+- Top-K / Top-P / Temperature 調整
+- 直前回答との過度な類似を検出して再生成する反復抑制
+- 生成停止に対応
+
+### 推論テレメトリ
+チャット画面で推論状態を確認できます。
+
+- Context使用量
+- PREFILL / THINKING / DECODE
+- TTFT
+- Prefill tok/s
+- Decode tok/s
+- 生成token数
+- Backend表示
+
+Contextメーターは LiteRT-LM の token count を使って更新します。
+
+### Persona
+JINKAKU の性格、口調、ユーザーとの距離感、ルールを自由に設定できます。
+
+さらにローカルのPersonaジェネレーターを搭載しています。
+
+- 完全ランダム生成
+- 既存Personaのミューテーション
+- テーマ選択
+- Chaos 0–100%
+- 生成結果は保存ボタンを押すまで現在のPersonaへ反映しない
+
+### 長期Memory
+通常チャットとは別に長期記憶をSQLiteへ保存します。
+
+主なMemory種別:
+
+- USER
+- SELF
+- RELATIONSHIP
+- EPISODIC
+- PREFERENCE
+- PROJECT
+- PERSONA
+
+Memoryには「誰についての記憶か」という所有者情報を持たせ、USERの記憶をJINKAKU自身の体験として誤認しにくい構造にしています。
+
+Memory画面から手動追加・確認も可能です。
+
+### 独り言モード
+チャット画面を開いたまま一定時間操作がないと、JINKAKUがPersonaや直近の会話を参照して短い独り言を生成します。
+
+モード:
+
+- OFF
+- 控えめ
+- 普通
+- よく喋る
+
+入力、送信、スクロールなどで待機タイマーはリセットされます。独り言は通常のユーザー発言として扱わず、Memory抽出対象にも入れません。
+
+### Web検索
+必要な場合だけ **Tavily** を使ってWeb検索できます。
+
+- OFF
+- 手動
+- 自動
+- Basic / Advanced
+- API keyは端末内に保存
+- 検索失敗時はローカル回答へフォールバック
+- Web情報は外部の未信頼コンテキストとしてプロンプトへ挿入
+
+通常のローカル会話だけならTavilyは不要です。
+
+### スーパーメンヘラモード
+通常チャットとは完全に分離した会話ゲームです。
+
+- 100チャット以内の安定化を目指す独立モード
+- 専用Persona
+- セッション専用Memory
+- 通常のPersona / Memory / Web / 会話DBへ保存しない
+- 終了時にゲーム用状態を破棄
+- Thinkingを使用
+- 6K–8K Context
+- 直近回答の重複を検出し、必要なら1回だけ自動再生成
+
+実験的な会話モードなので、通常チャットのMemoryを汚さず試せます。
+
+### UIカスタマイズ
+- Dark / Light
+- 2色アクセントを個別設定
+- 前景色の自動コントラスト調整
+- AI吹き出し横アイコン切替
+- 文字サイズ変更
+- Liquid Glass系UI
+- Adaptive Icon
+
+### アプリ内更新
+GitHub Releasesから更新確認、APK取得、インストールまで行えます。
+
+更新APKはアプリ側でダウンロードし、進捗を表示します。通信が途切れた場合の再開にも対応しています。
 
 ## モデル
 
-Main: `HauhauCS/Gemma-4-E4B-Uncensored-HauhauCS-Aggressive` の `Gemma-4-E4B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf`
+### Main chat / Memory worker
 
-Memory worker: `litert-community/gemma-4-E2B-it-litert-lm` の `gemma-4-E2B-it.litertlm`
+`litert-community/gemma-4-E2B-it-litert-lm`
 
-モデルはAPKに含めません。設定画面から取得します。
+使用ファイル:
 
-## Embeddingについて
+```
+gemma-4-E2B-it.litertlm
+```
 
-EmbeddingGemma 300MはHugging Face側でライセンス同意が必要なため、匿名ダウンロード前提の初期版には直接組み込んでいません。MVPでは`HashingEmbeddingEngine`を代替として使用し、固有名詞検索も併用します。後からEmbeddingGemma実装へ置き換えられる構造です。
+現在の通常チャットは **E2B LiteRT-LM only** です。リポジトリには過去のE4B実装や互換用コードも残っていますが、通常のメインチャット経路ではE2Bを使います。
+
+### Embedding
+
+`EmbeddingGemma 300M GGUF` の読み込みに対応しています。
+
+使用ファイル:
+
+```
+embeddinggemma-300M-qat-Q4_0.gguf
+```
+
+モデルはAPKに含めません。設定画面からダウンロードするか、端末内ファイルを指定して読み込みます。
+
+## 使い方
+
+1. Settings → **モデル** から E2B LiteRT-LM を導入
+2. **Persona** に性格・口調・呼び方・ルールを設定
+3. そのままチャット開始
+4. 必要なら Memory を手動追加
+5. Context / Thinking / Top-K / Top-P / Temperature を好みに合わせて調整
+6. 最新情報が必要な場合だけ Tavily Web検索を設定
+
+最初は **モデル → Persona → チャット** だけで十分です。
+
+## 対応環境
+
+- Android 13 / API 33 以上
+- arm64-v8a
+- targetSdk 36
+- compileSdk 36
+
+LiteRT-LMのGPU + MTPを前提にしているため、端末GPUやドライバとの相性によっては初期化できない場合があります。現在のメインチャットはCPUやMTP OFFへの自動フォールバックを行いません。
+
+## データと通信
+
+通常チャット、Persona、Memoryなどの主要データは端末内に保存します。
+
+外部通信が発生する主なケース:
+
+- Hugging Faceからのモデル取得
+- GitHub Releasesの更新確認 / APK取得
+- Tavily Web検索を有効にした場合
+
+Tavily検索では検索クエリを外部へ送信します。Web検索をOFFにすれば、通常会話のためにTavilyへ通信することはありません。
+
+## バックアップとログ
+
+- SQLite WAL checkpoint付きバックアップ
+- ログエクスポート
+- 0 byteログを避けるためのflush / sync
+- Android Auto Backup / device transferからアプリデータを除外
 
 ## ビルド
 
-JDK 17 + Gradle 8.13 + Android SDK 36。NDK・CMakeの指定は `.github/workflows/android.yml` を参照してください。
+必要環境:
 
-**ビルド前に、最新ワークフローの `Apply CPU runtime patches` ステップ全体を適用してください。**
-保存されているベースソースへ複数のPythonパッチを順番に適用してから、APKを作る構成です。
-ローカルでの再現方法は [引き継ぎ手順](docs/CHAT_HANDOFF.md#5-パッチ適用ビルドの確認方法) を参照してください。
+- JDK 17
+- Gradle 8.13
+- Android SDK 36
+- NDK 29.0.13113456
+- CMake 3.31.6
 
 ```bash
 gradle :app:assembleRelease
 ```
 
-`main`へのpushでGitHub Actionsがrelease APKを作成し、同一バージョンのGitHub Releaseへアップロードします。
+ただし、JINKAKUは保存されているKotlinソースへ複数のPythonパッチを順番に適用して最終ソースを生成する構成です。
+
+そのため、素の `assembleRelease` だけではGitHub Releasesと同じAPKにならない場合があります。現在の正しいパッチ順は次を参照してください。
+
+- `.github/workflows/android.yml`
+- `docs/CHAT_HANDOFF.md`
+
+開発をChat / Codexへ引き継ぐ場合も `docs/CHAT_HANDOFF.md` を先に確認してください。
+
+## GitHub Actions
+
+`main` へのpushでAndroid Release workflowが動きます。
+
+通常のリリースpushでは:
+
+1. legacy source patchesを順番に適用
+2. E2B-only変換と現行パッチを適用
+3. release APKをビルド
+4. `version.json` を生成
+5. GitHub ReleaseへAPKをアップロード
+
+ドキュメントだけを更新する場合は、不要なAPKビルドを避けるためコミットメッセージに `[skip ci]` を付ける運用を推奨します。
 
 ## 署名
 
-個人利用とアプリ内上書き更新を優先し、v0.xではリポジトリ内の固定keystoreでrelease APKを署名します。**公開リポジトリに鍵があるため、強いセキュリティはありません。** 公開配布する場合は秘密鍵管理へ移行してください。
+個人利用とアプリ内上書き更新を優先し、v0.xではリポジトリ内の固定keystoreでrelease APKを署名しています。
 
-## データ
+**公開リポジトリ内に鍵があるため、公開配布向けの強い署名セキュリティはありません。**
 
-通常チャットとMemoryは端末内SQLiteに保存します。外部通信はモデル取得・GitHub Release更新確認/取得に限定しています。
+第三者向けに正式配布する場合は、秘密鍵をリポジトリ外で管理する方式へ移行してください。
+
+## 開発メモ
+
+JINKAKUは現在も高速に仕様変更しているため、古いソースコメントやlegacy E4Bコードが残っている場合があります。
+
+実際の現行挙動を確認するときは、次の順で見るのが確実です。
+
+1. `.github/workflows/android.yml`
+2. workflowで最後に適用されるpatch
+3. `app/src/main/java/com/ikegami99/jinkaku/ai/E2BChatEngine.kt`
+4. 最新GitHub Release
+
+人類はコードよりREADMEを先に老化させがちなので、このREADMEでは「現在のReleaseで実際に使う経路」を優先して記載しています。
