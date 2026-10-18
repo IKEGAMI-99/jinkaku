@@ -45,6 +45,16 @@ if (QWEN3_ANDROID_VULKAN AND CMAKE_HOST_WIN32)
         set(Vulkan_GLSLC_EXECUTABLE "${_qwen3_glslc}" CACHE FILEPATH "" FORCE)
     endif()
 endif()
+# Android NDK bundles a host glslc binary but CMake FindVulkan does not
+# automatically locate it when cross-compiling on Linux CI hosts.
+if (QWEN3_ANDROID_VULKAN AND CMAKE_HOST_UNIX AND NOT APPLE)
+    set(_qwen3_glslc "${CMAKE_ANDROID_NDK}/shader-tools/linux-x86_64/glslc")
+    if (EXISTS "${_qwen3_glslc}")
+        set(Vulkan_GLSLC_EXECUTABLE "${_qwen3_glslc}" CACHE FILEPATH "" FORCE)
+    else()
+        message(FATAL_ERROR "Qwen Vulkan requires glslc. Expected: ${_qwen3_glslc}")
+    endif()
+endif()
 add_subdirectory("${GGML_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/ggml")
 
 find_package(Threads REQUIRED)
