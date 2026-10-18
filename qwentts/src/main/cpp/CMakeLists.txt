@@ -55,6 +55,16 @@ if (QWEN3_ANDROID_VULKAN AND CMAKE_HOST_UNIX AND NOT APPLE)
         message(FATAL_ERROR "Qwen Vulkan requires glslc. Expected: ${_qwen3_glslc}")
     endif()
 endif()
+# SPIR-V headers are needed by ggml-vulkan's host-side shader generator.
+# Android cross-compilation does not search the Linux host's /usr by default.
+if (QWEN3_ANDROID_VULKAN AND CMAKE_HOST_UNIX AND NOT APPLE)
+    set(_qwen_spirv_headers_dir "/usr/share/cmake/SPIRV-Headers")
+    if (EXISTS "${_qwen_spirv_headers_dir}/SPIRV-HeadersConfig.cmake")
+        set("SPIRV-Headers_DIR" "${_qwen_spirv_headers_dir}" CACHE PATH "Host SPIR-V headers" FORCE)
+    else()
+        message(FATAL_ERROR "Vulkan requires host SPIRV-Headers CMake package")
+    endif()
+endif()
 add_subdirectory("${GGML_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/ggml")
 
 find_package(Threads REQUIRED)
