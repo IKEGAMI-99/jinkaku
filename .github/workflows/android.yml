@@ -20,18 +20,26 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-      - uses: android-actions/setup-android@v3
+      # GitHub ubuntu-latest already includes Android SDK command-line tools.
+      # android-actions/setup-android@v3 currently tries to install the removed 'tools' package.
       - name: Install Android SDK, NDK and CMake
         run: |
-          yes | sdkmanager \
+          SDK_MANAGER="${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDK_MANAGER" ]; then
+            SDK_MANAGER="${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools/16.0/bin/sdkmanager"
+          fi
+          yes | "$SDK_MANAGER" --licenses > /dev/null
+          yes | "$SDK_MANAGER" \
             "platforms;android-36" \
             "build-tools;35.0.0" \
             "ndk;29.0.13113456" \
-            "cmake;3.31.6" || true
+            "cmake;3.31.6"
       - name: Apply legacy source patches
         run: |
           python3 scripts/patch_cpu_speed_v022.py
@@ -89,6 +97,7 @@ jobs:
           python3 scripts/patch_v084_menhera_emotion.py
           python3 scripts/patch_v085_menhera_antiloop.py
           python3 scripts/fix_v085_compile.py
+          python3 scripts/patch_v086_qwen_tts.py
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
@@ -118,5 +127,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="v${{ steps.prep.outputs.version }}-b${{ steps.prep.outputs.code }}"
-          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "Jinkaku v${{ steps.prep.outputs.version }} build ${{ steps.prep.outputs.code }}" --notes "Adds anti-loop dialogue progression to Super Menhera. Recent assistant replies are explicitly avoided, short user questions are no longer mirrored back, and every reply must introduce a new emotional or conversational delta while keeping Thinking enabled." --target "$GITHUB_SHA"
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "Jinkaku v${{ steps.prep.outputs.version }} build ${{ steps.prep.outputs.code }}" --notes "Adds on-device Qwen3-TTS 0.6B voice playback, voice-reference profiles, and optional model download. Keeps Gemma 4 E2B chat and long-term Memory unchanged." --target "$GITHUB_SHA"
           gh release upload "$TAG" "${{ steps.prep.outputs.apk }}" version.json --clobber
