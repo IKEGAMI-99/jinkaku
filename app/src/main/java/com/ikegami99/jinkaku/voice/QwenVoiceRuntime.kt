@@ -28,6 +28,16 @@ class QwenVoiceRuntime(context: Context) {
     )
     private val baseUrl = "https://huggingface.co/Serveurperso/Qwen3-TTS-GGUF/resolve/main/"
     @Volatile private var track: AudioTrack? = null
+    private val prefs = app.getSharedPreferences("qwen_voice_preferences", Context.MODE_PRIVATE)
+    var autoRead: Boolean
+        get() = prefs.getBoolean("auto_read", false)
+        set(value) { prefs.edit().putBoolean("auto_read", value).apply() }
+    var backend: Int
+        get() = prefs.getInt("backend", QwenEngine.BACKEND_CPU)
+        set(value) { prefs.edit().putInt("backend", value).apply() }
+    fun gpuAvailable(): Boolean = runCatching {
+        QwenEngine().use { it.getCompiledBackendMask() and 2 != 0 }
+    }.getOrDefault(false)
 
     val ready: Boolean get() = requirements.all { (name, size) ->
         File(modelDir, name).length() == size
@@ -112,7 +122,13 @@ class QwenVoiceRuntime(context: Context) {
         stop()
         val native = QwenEngine()
         try {
-            native.setBackendPreference(QwenEngine.BACKEND_CPU)
+            val preferred = backend
+            if (preferred == QwenEngine.BACKEND_GPU) {
+                check(native.getCompiledBackendMask() and 2 != 0) {
+                    "GPUバックエンドはこのビルドでは利用できません。CPUを選択してください"
+                }
+            }
+            check(native.setBackendPreference(preferred)) { "音声バックエンドを設定できません" }
             native.setCpuThreads(4)
             check(native.loadModels(modelDir.absolutePath, talker)) {
                 native.getLastError() ?: "Qwen3-TTSの読み込みに失敗しました"
