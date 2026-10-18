@@ -143,11 +143,11 @@ internal class PersonaVoiceDesigner(context: Context) {
             }
             val native = QwenEngine()
             try {
-                native.setBackendPreference(QwenEngine.BACKEND_CPU)
-                native.setCpuThreads(4)
+                QwenVoiceSettings.configure(native, app)
                 check(native.loadModels(voice.modelDir.absolutePath, talker)) {
                     native.getLastError() ?: "VoiceDesignモデルを読み込めません"
                 }
+                QwenVoiceSettings.verifyActive(native, app)
                 check(native.getModelCapabilities()?.supportsInstruction == true) {
                     "この音声エンジンはVoiceDesignの指示生成に対応していません"
                 }
@@ -278,7 +278,7 @@ internal fun PersonaVoiceDesignerDialog(
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("人格の特徴から声を設計し、サンプルを保存して通常会話の声として使います。",
                     style = MaterialTheme.typography.bodySmall)
-                Text("1.7B VoiceDesign Q4_K_M / CPU / オフライン推論",
+                Text("1.7B VoiceDesign Q4_K_M / CPU・GPU設定共通 / オフライン推論",
                     style = MaterialTheme.typography.bodySmall)
                 Text("VoiceDesignモデル: " + if (downloaded) "導入済み" else "未導入（約1.2GB）")
                 if (!downloaded) {
@@ -326,7 +326,7 @@ internal fun PersonaVoiceDesignerDialog(
                                 busy = true
                                 designer.stop()
                                 designer.savePrompt(persona, description)
-                                status = label + " の音声を生成中。CPU処理には時間がかかります。"
+                                status = label + " の音声を生成中。端末内処理には時間がかかります。"
                                 job = scope.launch {
                                     try {
                                         val file = designer.generate(persona, description, index)

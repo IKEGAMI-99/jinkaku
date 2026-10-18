@@ -40,6 +40,15 @@ jobs:
             "build-tools;35.0.0" \
             "ndk;29.0.13113456" \
             "cmake;3.31.6"
+      - name: Install Vulkan SPIR-V headers
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends spirv-headers libvulkan-dev
+          # Android NDK supplies vulkan.h but not Vulkan-Hpp (vulkan.hpp).
+          # Isolate these host header files so Android's sysroot remains first.
+          mkdir -p "$GITHUB_WORKSPACE/.ci-vulkan-hpp/vulkan"
+          cp -a /usr/include/vulkan/. "$GITHUB_WORKSPACE/.ci-vulkan-hpp/vulkan/"
+          cp -a /usr/include/spirv "$GITHUB_WORKSPACE/.ci-vulkan-hpp/spirv"
       - name: Apply legacy source patches
         run: |
           python3 scripts/patch_cpu_speed_v022.py
@@ -98,6 +107,7 @@ jobs:
           python3 scripts/patch_v085_menhera_antiloop.py
           python3 scripts/fix_v085_compile.py
           python3 scripts/patch_v086_qwen_tts.py
+          python3 scripts/patch_v088_auto_voice.py
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
@@ -127,5 +137,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="v${{ steps.prep.outputs.version }}-b${{ steps.prep.outputs.code }}"
-          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "Jinkaku v${{ steps.prep.outputs.version }} build ${{ steps.prep.outputs.code }}" --notes "Adds offline Persona-to-VoiceDesign 1.7B voice creation, three preview styles and saved voice profiles reused by the existing 0.6B Base TTS. Chat and Memory remain unchanged." --target "$GITHUB_SHA"
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "Jinkaku v${{ steps.prep.outputs.version }} build ${{ steps.prep.outputs.code }}" --notes "Adds automatic voice playback for new AI replies and an experimental Vulkan GPU selector for Qwen3-TTS. CPU remains default; chat and long-term Memory are unchanged." --target "$GITHUB_SHA"
           gh release upload "$TAG" "${{ steps.prep.outputs.apk }}" version.json --clobber
