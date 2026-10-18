@@ -46,6 +46,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends spirv-headers libvulkan-dev
           test -f /usr/share/cmake/SPIRV-Headers/SPIRV-HeadersConfig.cmake
           test -f /usr/include/vulkan/vulkan.hpp
+          test -f /usr/include/spirv/unified1/spirv.hpp
       - name: Apply legacy source patches
         run: |
           python3 scripts/patch_cpu_speed_v022.py
