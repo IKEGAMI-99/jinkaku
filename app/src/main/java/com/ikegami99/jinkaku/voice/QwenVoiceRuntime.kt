@@ -28,6 +28,16 @@ class QwenVoiceRuntime(context: Context) {
     )
     private val baseUrl = "https://huggingface.co/Serveurperso/Qwen3-TTS-GGUF/resolve/main/"
     @Volatile private var track: AudioTrack? = null
+    private val prefs = app.getSharedPreferences("qwen_voice_preferences", Context.MODE_PRIVATE)
+    var autoRead: Boolean
+        get() = prefs.getBoolean("auto_read", false)
+        set(value) { prefs.edit().putBoolean("auto_read", value).apply() }
+    var backend: Int
+        get() = prefs.getInt("backend", QwenEngine.BACKEND_CPU)
+        set(value) { prefs.edit().putInt("backend", value).apply() }
+    fun gpuAvailable(): Boolean = app.packageManager.hasSystemFeature(
+        android.content.pm.PackageManager.FEATURE_VULKAN_HARDWARE_VERSION
+    ) // Vulkan is compiled in for this APK; native load validates actual GPU availability.
 
     val ready: Boolean get() = requirements.all { (name, size) ->
         File(modelDir, name).length() == size
@@ -112,7 +122,8 @@ class QwenVoiceRuntime(context: Context) {
         stop()
         val native = QwenEngine()
         try {
-            native.setBackendPreference(QwenEngine.BACKEND_CPU)
+            val preferred = backend
+            check(native.setBackendPreference(preferred)) { "音声バックエンドを設定できません" }
             native.setCpuThreads(4)
             check(native.loadModels(modelDir.absolutePath, talker)) {
                 native.getLastError() ?: "Qwen3-TTSの読み込みに失敗しました"

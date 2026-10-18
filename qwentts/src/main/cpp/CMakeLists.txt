@@ -45,7 +45,44 @@ if (QWEN3_ANDROID_VULKAN AND CMAKE_HOST_WIN32)
         set(Vulkan_GLSLC_EXECUTABLE "${_qwen3_glslc}" CACHE FILEPATH "" FORCE)
     endif()
 endif()
+# Android NDK bundles a host glslc binary but CMake FindVulkan does not
+# automatically locate it when cross-compiling on Linux CI hosts.
+if (QWEN3_ANDROID_VULKAN AND CMAKE_HOST_UNIX AND NOT APPLE)
+    set(_qwen3_glslc "${CMAKE_ANDROID_NDK}/shader-tools/linux-x86_64/glslc")
+    if (EXISTS "${_qwen3_glslc}")
+        set(Vulkan_GLSLC_EXECUTABLE "${_qwen3_glslc}" CACHE FILEPATH "" FORCE)
+    else()
+        message(FATAL_ERROR "Qwen Vulkan requires glslc. Expected: ${_qwen3_glslc}")
+    endif()
+endif()
+# SPIR-V headers are needed by ggml-vulkan's host-side shader generator.
+# Android cross-compilation does not search the Linux host's /usr by default.
+if (QWEN3_ANDROID_VULKAN AND CMAKE_HOST_UNIX AND NOT APPLE)
+    set(_qwen_spirv_headers_dir "/usr/share/cmake/SPIRV-Headers")
+    if (EXISTS "${_qwen_spirv_headers_dir}/SPIRV-HeadersConfig.cmake")
+        set("SPIRV-Headers_DIR" "${_qwen_spirv_headers_dir}" CACHE PATH "Host SPIR-V headers" FORCE)
+    else()
+        message(FATAL_ERROR "Vulkan requires host SPIRV-Headers CMake package")
+    endif()
+endif()
 add_subdirectory("${GGML_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/ggml")
+
+# NDK ships Vulkan C headers, but not Vulkan-Hpp (vulkan/vulkan.hpp).
+# Copy only the host Vulkan headers into an isolated staging include directory
+# to prevent Android clang from accidentally resolving host glibc headers.
+if (QWEN3_ANDROID_VULKAN AND CMAKE_HOST_UNIX AND NOT APPLE)
+    if (NOT EXISTS "/usr/include/vulkan/vulkan.hpp")
+        message(FATAL_ERROR "Vulkan-Hpp C++ headers not found: install libvulkan-dev")
+    endif()
+    set(_qwen_vulkan_hpp_root "${CMAKE_CURRENT_BINARY_DIR}/vulkan-hpp-staging")
+    file(MAKE_DIRECTORY "${_qwen_vulkan_hpp_root}")
+    file(COPY "/usr/include/vulkan" DESTINATION "${_qwen_vulkan_hpp_root}")
+    if (NOT EXISTS "/usr/include/spirv/unified1/spirv.hpp")
+        message(FATAL_ERROR "SPIR-V headers not found: install spirv-headers")
+    endif()
+    file(COPY "/usr/include/spirv" DESTINATION "${_qwen_vulkan_hpp_root}")
+    target_include_directories(ggml-vulkan BEFORE PRIVATE "${_qwen_vulkan_hpp_root}")
+endif()
 
 find_package(Threads REQUIRED)
 

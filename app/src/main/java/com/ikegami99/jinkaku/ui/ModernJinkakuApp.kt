@@ -99,6 +99,10 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.ikegami99.jinkaku.JinkakuViewModel
+import com.ikegami99.jinkaku.voice.QwenVoiceRuntime
+import com.ikegami99.jinkaku.data.ROLE_ASSISTANT
+import androidx.compose.runtime.DisposableEffect
+import kotlinx.coroutines.Job
 import com.ikegami99.jinkaku.ai.InferenceTelemetry
 import com.ikegami99.jinkaku.ai.InferenceTelemetryState
 import com.ikegami99.jinkaku.data.MemoryRecord
@@ -397,6 +401,39 @@ private fun ModernChatScreen(vm: JinkakuViewModel, modifier: Modifier = Modifier
     val keyboard = LocalSoftwareKeyboardController.current
     val listState = rememberLazyListState()
     val showTypingBubble = ui.busy && telemetry.phase in setOf("PREFILL", "THINKING", "DECODE")
+    val context = LocalContext.current
+    val voice = remember(context) { QwenVoiceRuntime(context) }
+    val lastReply = ui.messages.lastOrNull { it.role == ROLE_ASSISTANT }
+    var lastSpokenId by remember { mutableStateOf(ui.messages.lastOrNull { it.role == ROLE_ASSISTANT }?.id) }
+    var inferenceStarted by remember { mutableStateOf(ui.busy) }
+    var voiceJob by remember { mutableStateOf<Job?>(null) }
+    LaunchedEffect(lastReply?.id, ui.busy, voice.autoRead, voice.ready) {
+        if (ui.busy) {
+            inferenceStarted = true
+            voiceJob?.cancel()
+            voice.stop()
+        } else if (inferenceStarted) {
+            // Only read after a genuine generation cycle, not when old chat history loads.
+            inferenceStarted = false
+            if (lastReply != null && lastReply.id != lastSpokenId) {
+                lastSpokenId = lastReply.id
+                if (voice.autoRead && voice.ready) {
+                    val persona = vm.currentPersona()
+                    voiceJob = launch {
+                        try { voice.speak(lastReply.content, persona) }
+                        catch (e: Exception) {
+                            if (e !is kotlinx.coroutines.CancellationException)
+                                android.util.Log.w("JinkakuVoice", "Auto read failed", e)
+                        }
+                    }
+                }
+            }
+        } else {
+            // Keep track of history updates without treating them as new replies.
+            lastSpokenId = lastReply?.id
+        }
+    }
+    DisposableEffect(voice) { onDispose { voiceJob?.cancel(); voice.stop() } }
 
     fun submit() {
         val value = input.trim()
