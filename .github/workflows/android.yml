@@ -43,7 +43,11 @@ jobs:
       - name: Install Vulkan SPIR-V headers
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends spirv-headers
+          sudo apt-get install -y --no-install-recommends spirv-headers libvulkan-dev
+          # Android NDK supplies vulkan.h but not Vulkan-Hpp (vulkan.hpp).
+          # Isolate these host header files so Android's sysroot remains first.
+          mkdir -p "$GITHUB_WORKSPACE/.ci-vulkan-hpp/vulkan"
+          cp -a /usr/include/vulkan/. "$GITHUB_WORKSPACE/.ci-vulkan-hpp/vulkan/"
       - name: Apply legacy source patches
         run: |
           python3 scripts/patch_cpu_speed_v022.py
