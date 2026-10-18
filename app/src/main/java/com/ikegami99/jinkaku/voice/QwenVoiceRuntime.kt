@@ -122,12 +122,19 @@ class QwenVoiceRuntime(context: Context) {
         stop()
         val native = QwenEngine()
         try {
-            val preferred = backend
+            // Native preference 2 is CUDA-only. On Android, AUTO probes Vulkan
+            // (integrated GPU first) and safely falls back to CPU when unavailable.
+            val preferred = if (backend == QwenEngine.BACKEND_GPU) {
+                QwenEngine.BACKEND_AUTO
+            } else {
+                QwenEngine.BACKEND_CPU
+            }
             check(native.setBackendPreference(preferred)) { "音声バックエンドを設定できません" }
             native.setCpuThreads(4)
             check(native.loadModels(modelDir.absolutePath, talker)) {
                 native.getLastError() ?: "Qwen3-TTSの読み込みに失敗しました"
             }
+            val activeBackend = native.getActiveBackendName().orEmpty().ifBlank { "不明" }
             val voice = referenceFor(persona).takeIf { it.exists() }?.absolutePath
             val result = native.synthesize(
                 cleaned, referenceWav = voice,
@@ -154,6 +161,7 @@ class QwenVoiceRuntime(context: Context) {
             }
             player.play()
             delay(audio.size.toLong() * 1000L / rate + 300L)
+            activeBackend
         } finally {
             stop()
             native.close()

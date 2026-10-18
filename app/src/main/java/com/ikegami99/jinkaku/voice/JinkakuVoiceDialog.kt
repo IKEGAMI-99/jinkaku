@@ -114,7 +114,12 @@ fun JinkakuVoiceDialog(vm: JinkakuViewModel, onDismiss: () -> Unit) {
                         onClick = { selectedBackend = QwenEngine.BACKEND_GPU; runtime.backend = selectedBackend },
                         enabled = gpuAvailable, label = { Text("GPU (Vulkan)") })
                 }
-                if (!gpuAvailable) Text("GPUは現在のAPKで利用できません。CPUで動作します。", style = MaterialTheme.typography.bodySmall)
+                if (!gpuAvailable) {
+                    Text("GPUを利用できないためCPUで動作します。", style = MaterialTheme.typography.bodySmall)
+                } else if (selectedBackend == QwenEngine.BACKEND_GPU) {
+                    Text("Vulkan対応GPUを優先し、利用できない場合はCPUへ切り替えます。",
+                        style = MaterialTheme.typography.bodySmall)
+                }
                 HorizontalDivider()
                 Text("Personaの声: " + if (referenceReady) "設定済み" else "未設定")
                 OutlinedButton(
@@ -141,8 +146,8 @@ fun JinkakuVoiceDialog(vm: JinkakuViewModel, onDismiss: () -> Unit) {
                 status = "音声を生成中"
                 currentJob = scope.launch {
                     try {
-                        runtime.speak(lastAssistant, persona)
-                        status = "再生完了"
+                        val activeBackend = runtime.speak(lastAssistant, persona)
+                        status = "再生完了（使用バックエンド: $activeBackend）"
                     } catch (e: Exception) { status = e.message ?: "音声生成に失敗しました" }
                     finally { speaking = false }
                 }
