@@ -9,6 +9,11 @@ import com.qwen.tts.studio.engine.QwenEngine
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import java.util.concurrent.atomic.AtomicLong
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
@@ -27,7 +32,24 @@ class QwenVoiceRuntime(context: Context) {
         talker to 628_905_056L
     )
     private val baseUrl = "https://huggingface.co/Serveurperso/Qwen3-TTS-GGUF/resolve/main/"
-    @Volatile private var track: AudioTrack? = null
+    companion object {
+        // All dialog/automatic playback requests share a single native generation queue.
+        private val speechMutex = Mutex()
+        private val generationToken = AtomicLong(0)
+        private val trackGuard = Any()
+        @Volatile private var activeTrack: AudioTrack? = null
+
+        private fun releaseAudio() {
+            synchronized(trackGuard) {
+                val player = activeTrack
+                activeTrack = null
+                if (player != null) runCatching {
+                    if (player.playState == AudioTrack.PLAYSTATE_PLAYING) player.stop()
+                    player.release()
+                }
+            }
+        }
+    }
 
     val ready: Boolean get() = requirements.all { (name, size) ->
         File(modelDir, name).length() == size
@@ -107,54 +129,59 @@ class QwenVoiceRuntime(context: Context) {
 
     suspend fun speak(text: String, persona: String) = withContext(Dispatchers.IO) {
         check(ready) { "Qwen3-TTSのモデルを先に取得してください" }
-        val cleaned = text.replace(Regex("[\u0000-\u001f]"), " ").trim().take(240)
+        val cleaned = text.replace(Regex("[\\u0000-\\u001f]"), " ").trim().take(240)
         require(cleaned.isNotBlank()) { "読み上げる文章がありません" }
-        stop()
-        val native = QwenEngine()
-        try {
-            native.setBackendPreference(QwenEngine.BACKEND_CPU)
-            native.setCpuThreads(4)
-            check(native.loadModels(modelDir.absolutePath, talker)) {
-                native.getLastError() ?: "Qwen3-TTSの読み込みに失敗しました"
+        val request = generationToken.incrementAndGet()
+        speechMutex.withLock {
+            currentCoroutineContext().ensureActive()
+            if (generationToken.get() != request) return@withLock
+            releaseAudio()
+            val native = QwenEngine()
+            try {
+                QwenVoiceSettings.configure(native, app)
+                check(native.loadModels(modelDir.absolutePath, talker)) {
+                    native.getLastError() ?: "Qwen3-TTSの読み込みに失敗しました"
+                }
+                QwenVoiceSettings.verifyActive(native, app)
+                val voice = referenceFor(persona).takeIf { it.exists() }?.absolutePath
+                val result = native.synthesize(
+                    cleaned, referenceWav = voice,
+                    params = QwenEngine.NativeParams(languageId = 2058, maxAudioTokens = 512)
+                )
+                currentCoroutineContext().ensureActive()
+                if (generationToken.get() != request) return@withLock
+                check(result.success && result.audio?.isNotEmpty() == true) {
+                    result.errorMsg ?: "音声生成に失敗しました"
+                }
+                val audio = result.audio!!
+                val rate = result.sampleRate.takeIf { it > 0 } ?: 24_000
+                val player = AudioTrack.Builder()
+                    .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
+                    .setAudioFormat(AudioFormat.Builder()
+                        .setEncoding(AudioFormat.ENCODING_PCM_FLOAT)
+                        .setSampleRate(rate)
+                        .setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build())
+                    .setTransferMode(AudioTrack.MODE_STATIC)
+                    .setBufferSizeInBytes(audio.size * 4)
+                    .build()
+                synchronized(trackGuard) { activeTrack = player }
+                check(player.write(audio, 0, audio.size, AudioTrack.WRITE_BLOCKING) > 0) {
+                    "音声の再生に失敗しました"
+                }
+                currentCoroutineContext().ensureActive()
+                if (generationToken.get() != request) return@withLock
+                player.play()
+                delay(audio.size.toLong() * 1000L / rate + 300L)
+            } finally {
+                releaseAudio()
+                native.close()
             }
-            val voice = referenceFor(persona).takeIf { it.exists() }?.absolutePath
-            val result = native.synthesize(
-                cleaned, referenceWav = voice,
-                params = QwenEngine.NativeParams(languageId = 2058, maxAudioTokens = 512)
-            )
-            check(result.success && result.audio?.isNotEmpty() == true) {
-                result.errorMsg ?: "音声生成に失敗しました"
-            }
-            val audio = result.audio!!
-            val rate = result.sampleRate.takeIf { it > 0 } ?: 24_000
-            val player = AudioTrack.Builder()
-                .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
-                .setAudioFormat(AudioFormat.Builder()
-                    .setEncoding(AudioFormat.ENCODING_PCM_FLOAT)
-                    .setSampleRate(rate)
-                    .setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build())
-                .setTransferMode(AudioTrack.MODE_STATIC)
-                .setBufferSizeInBytes(audio.size * 4)
-                .build()
-            track = player
-            check(player.write(audio, 0, audio.size, AudioTrack.WRITE_BLOCKING) > 0) {
-                "音声の再生に失敗しました"
-            }
-            player.play()
-            delay(audio.size.toLong() * 1000L / rate + 300L)
-        } finally {
-            stop()
-            native.close()
         }
     }
 
     fun stop() {
-        val player = track
-        track = null
-        if (player != null) runCatching {
-            if (player.playState == AudioTrack.PLAYSTATE_PLAYING) player.stop()
-            player.release()
-        }
+        generationToken.incrementAndGet()
+        releaseAudio()
     }
 }
