@@ -30,11 +30,12 @@ jobs:
       # android-actions/setup-android@v3 currently tries to install the removed 'tools' package.
       - name: Install Android SDK, NDK and CMake
         run: |
+          yes | sdkmanager --licenses > /dev/null
           yes | sdkmanager \
             "platforms;android-36" \
             "build-tools;35.0.0" \
             "ndk;29.0.13113456" \
-            "cmake;3.31.6" || true
+            "cmake;3.31.6"
       - name: Apply legacy source patches
         run: |
           python3 scripts/patch_cpu_speed_v022.py
