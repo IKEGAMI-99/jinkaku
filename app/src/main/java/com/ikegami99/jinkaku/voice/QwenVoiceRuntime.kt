@@ -35,9 +35,9 @@ class QwenVoiceRuntime(context: Context) {
     var backend: Int
         get() = prefs.getInt("backend", QwenEngine.BACKEND_CPU)
         set(value) { prefs.edit().putInt("backend", value).apply() }
-    fun gpuAvailable(): Boolean = runCatching {
-        QwenEngine().use { it.getCompiledBackendMask() and 2 != 0 }
-    }.getOrDefault(false)
+    fun gpuAvailable(): Boolean = app.packageManager.hasSystemFeature(
+        android.content.pm.PackageManager.FEATURE_VULKAN_HARDWARE_VERSION
+    ) // Vulkan is compiled in for this APK; native load validates actual GPU availability.
 
     val ready: Boolean get() = requirements.all { (name, size) ->
         File(modelDir, name).length() == size
@@ -123,11 +123,6 @@ class QwenVoiceRuntime(context: Context) {
         val native = QwenEngine()
         try {
             val preferred = backend
-            if (preferred == QwenEngine.BACKEND_GPU) {
-                check(native.getCompiledBackendMask() and 2 != 0) {
-                    "GPUバックエンドはこのビルドでは利用できません。CPUを選択してください"
-                }
-            }
             check(native.setBackendPreference(preferred)) { "音声バックエンドを設定できません" }
             native.setCpuThreads(4)
             check(native.loadModels(modelDir.absolutePath, talker)) {
