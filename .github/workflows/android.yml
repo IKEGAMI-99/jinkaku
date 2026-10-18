@@ -26,7 +26,8 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - uses: android-actions/setup-android@v3
+      # GitHub ubuntu-latest already includes Android SDK command-line tools.
+      # android-actions/setup-android@v3 currently tries to install the removed 'tools' package.
       - name: Install Android SDK, NDK and CMake
         run: |
           yes | sdkmanager \
