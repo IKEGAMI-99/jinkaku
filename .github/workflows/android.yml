@@ -134,5 +134,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="v${{ steps.prep.outputs.version }}-b${{ steps.prep.outputs.code }}"
-          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "Jinkaku v${{ steps.prep.outputs.version }} build ${{ steps.prep.outputs.code }}" --notes "Adds optional automatic speech for completed chat replies and an experimental Vulkan GPU voice backend selector, with CPU preserved. Existing Persona voice profiles and Memory remain unchanged." --target "$GITHUB_SHA"
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "Jinkaku v${{ steps.prep.outputs.version }} build ${{ steps.prep.outputs.code }}" --notes "Fixes the Qwen3-TTS Vulkan GPU selection incorrectly requesting CUDA on Snapdragon Android. GPU mode now probes Vulkan and falls back to CPU when unavailable; the active backend is displayed after playback. Existing Persona voice profiles and Memory remain unchanged." --target "$GITHUB_SHA"
           gh release upload "$TAG" "${{ steps.prep.outputs.apk }}" version.json --clobber
