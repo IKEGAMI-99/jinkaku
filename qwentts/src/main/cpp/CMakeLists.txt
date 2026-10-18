@@ -53,6 +53,19 @@ if (QWEN3_ANDROID_VULKAN AND CMAKE_HOST_WIN32)
         set(Vulkan_GLSLC_EXECUTABLE "${_qwen3_glslc}" CACHE FILEPATH "" FORCE)
     endif()
 endif()
+if (QWEN3_ANDROID_VULKAN AND CMAKE_CROSSCOMPILING)
+    # SPIRV-Headers is a host-installed CMake config package, not part of the Android sysroot.
+    find_path(QWEN3_SPIRV_HEADERS_CONFIG_DIR
+        NAMES SPIRV-HeadersConfig.cmake
+        PATHS /usr/share/cmake /usr/lib/cmake /usr/lib/x86_64-linux-gnu/cmake
+        PATH_SUFFIXES SPIRV-Headers
+        NO_DEFAULT_PATH
+        NO_CMAKE_FIND_ROOT_PATH
+    )
+    if (QWEN3_SPIRV_HEADERS_CONFIG_DIR)
+        set("SPIRV-Headers_DIR" "${QWEN3_SPIRV_HEADERS_CONFIG_DIR}" CACHE PATH "" FORCE)
+    endif()
+endif()
 add_subdirectory("${GGML_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/ggml")
 
 find_package(Threads REQUIRED)
