@@ -132,5 +132,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="v${{ steps.prep.outputs.version }}-b${{ steps.prep.outputs.code }}"
-          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "Jinkaku v${{ steps.prep.outputs.version }} build ${{ steps.prep.outputs.code }}" --notes "Adds offline Persona-to-VoiceDesign 1.7B voice creation, three preview styles and saved voice profiles reused by the existing 0.6B Base TTS. Chat and Memory remain unchanged." --target "$GITHUB_SHA"
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "Jinkaku v${{ steps.prep.outputs.version }} build ${{ steps.prep.outputs.code }}" --notes "Adds optional automatic speech for completed chat replies and an experimental Vulkan GPU voice backend selector, with CPU preserved. Existing Persona voice profiles and Memory remain unchanged." --target "$GITHUB_SHA"
           gh release upload "$TAG" "${{ steps.prep.outputs.apk }}" version.json --clobber
