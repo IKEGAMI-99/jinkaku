@@ -39,6 +39,14 @@ if (QWEN3_ANDROID_VULKAN AND CMAKE_HOST_WIN32 AND NOT DEFINED GGML_VULKAN_HOST_C
         set(GGML_VULKAN_HOST_LINKER "${_qwen3_host_cl_dir}/link.exe" CACHE FILEPATH "" FORCE)
     endif()
 endif()
+if (QWEN3_ANDROID_VULKAN AND CMAKE_HOST_UNIX AND NOT CMAKE_HOST_APPLE)
+    # CMake's FindVulkan does not automatically search the Android NDK
+    # host shader-tools directory when cross-compiling Android.
+    set(_qwen3_glslc "${CMAKE_ANDROID_NDK}/shader-tools/linux-x86_64/glslc")
+    if (EXISTS "${_qwen3_glslc}")
+        set(Vulkan_GLSLC_EXECUTABLE "${_qwen3_glslc}" CACHE FILEPATH "" FORCE)
+    endif()
+endif()
 if (QWEN3_ANDROID_VULKAN AND CMAKE_HOST_WIN32)
     set(_qwen3_glslc "${CMAKE_ANDROID_NDK}/shader-tools/windows-x86_64/glslc.exe")
     if (EXISTS "${_qwen3_glslc}")
