@@ -122,7 +122,7 @@ class QwenVoiceRuntime(context: Context) {
                 cleaned, referenceWav = voice,
                 params = QwenEngine.NativeParams(languageId = 2058, maxAudioTokens = 512)
             )
-            check(result.success && !result.audio.isNullOrEmpty()) {
+            check(result.success && result.audio?.isNotEmpty() == true) {
                 result.errorMsg ?: "音声生成に失敗しました"
             }
             val audio = result.audio!!
