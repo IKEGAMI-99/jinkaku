@@ -98,6 +98,7 @@ jobs:
           python3 scripts/patch_v085_menhera_antiloop.py
           python3 scripts/fix_v085_compile.py
           python3 scripts/patch_v086_qwen_tts.py
+          python3 scripts/patch_v088_auto_voice.py
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
@@ -127,5 +128,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="v${{ steps.prep.outputs.version }}-b${{ steps.prep.outputs.code }}"
-          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "Jinkaku v${{ steps.prep.outputs.version }} build ${{ steps.prep.outputs.code }}" --notes "Adds offline Persona-to-VoiceDesign 1.7B voice creation, three preview styles and saved voice profiles reused by the existing 0.6B Base TTS. Chat and Memory remain unchanged." --target "$GITHUB_SHA"
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "Jinkaku v${{ steps.prep.outputs.version }} build ${{ steps.prep.outputs.code }}" --notes "Adds automatic voice playback for new AI replies and an experimental Vulkan GPU selector for Qwen3-TTS. CPU remains default; chat and long-term Memory are unchanged." --target "$GITHUB_SHA"
           gh release upload "$TAG" "${{ steps.prep.outputs.apk }}" version.json --clobber
