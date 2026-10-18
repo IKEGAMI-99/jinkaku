@@ -131,7 +131,7 @@ class QwenVoiceRuntime(context: Context) {
     // once, so the first segment can play before the rest of the reply is ready.
     private fun speechChunks(raw: String): List<String> {
         val cleaned = raw.replace(Regex("[\\u0000-\\u001f]"), " ")
-            .replace(Regex("[#*_\x60~]+"), " ").trim().take(4000)
+            .replace(Regex("[#*_~]+"), " ").trim().take(4000)
         val chunks = mutableListOf<String>()
         val pending = StringBuilder()
         for (character in cleaned) {
