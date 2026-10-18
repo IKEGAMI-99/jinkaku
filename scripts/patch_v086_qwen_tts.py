@@ -12,7 +12,7 @@ def main():
         return
 
     def one(old, new, label):
-        global text
+        nonlocal text
         count = text.count(old)
         if count != 1:
             raise RuntimeError(f"{label}: expected one anchor, found {count}")
