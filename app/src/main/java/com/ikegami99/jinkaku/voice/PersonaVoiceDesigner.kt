@@ -159,7 +159,7 @@ internal class PersonaVoiceDesigner(context: Context) {
                         maxAudioTokens = 480
                     )
                 )
-                check(result.success && !result.audio.isNullOrEmpty()) {
+                check(result.success && result.audio?.isNotEmpty() == true) {
                     result.errorMsg ?: "VoiceDesignの生成に失敗しました"
                 }
                 val output = File(app.cacheDir, "persona_voice_" + key(persona) + "_" + variant + ".wav")
