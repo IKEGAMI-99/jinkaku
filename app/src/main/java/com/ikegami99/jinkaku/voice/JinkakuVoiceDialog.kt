@@ -32,6 +32,8 @@ fun JinkakuVoiceDialog(vm: JinkakuViewModel, onDismiss: () -> Unit) {
     var speaking by remember { mutableStateOf(false) }
     var referenceReady by remember { mutableStateOf(runtime.referenceFor(persona).exists()) }
     var showDesigner by remember { mutableStateOf(false) }
+    var autoRead by remember { mutableStateOf(QwenVoiceSettings.autoRead(context)) }
+    var backend by remember { mutableStateOf(QwenVoiceSettings.backend(context)) }
     var currentJob by remember { mutableStateOf<Job?>(null) }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -77,7 +79,7 @@ fun JinkakuVoiceDialog(vm: JinkakuViewModel, onDismiss: () -> Unit) {
         title = { Text("Qwen3-TTS · Voice") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("日本語 / 0.6B Q4_K_M / CPU・完全ローカル", style = MaterialTheme.typography.bodySmall)
+                Text("日本語 / 0.6B Q4_K_M / CPU・Vulkan GPU / 完全ローカル", style = MaterialTheme.typography.bodySmall)
                 Text("モデル: " + if (runtime.ready) "導入済み" else "未導入（約884MB）")
                 if (!runtime.ready) {
                     Button(onClick = {
@@ -93,6 +95,39 @@ fun JinkakuVoiceDialog(vm: JinkakuViewModel, onDismiss: () -> Unit) {
                         Text(if (downloading) "取得中…" else "モデルをダウンロード")
                     }
                 }
+                HorizontalDivider()
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("返信を自動読み上げ", modifier = Modifier.weight(1f))
+                    Switch(
+                        checked = autoRead,
+                        onCheckedChange = { value ->
+                            autoRead = value
+                            QwenVoiceSettings.setAutoRead(context, value)
+                        }
+                    )
+                }
+                Text("音声生成の処理方式", style = MaterialTheme.typography.titleSmall)
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    FilterChip(
+                        selected = backend == QwenVoiceSettings.CPU,
+                        onClick = {
+                            backend = QwenVoiceSettings.CPU
+                            QwenVoiceSettings.setBackend(context, backend)
+                        },
+                        enabled = !speaking && !downloading,
+                        label = { Text("CPU") }
+                    )
+                    FilterChip(
+                        selected = backend == QwenVoiceSettings.GPU,
+                        onClick = {
+                            backend = QwenVoiceSettings.GPU
+                            QwenVoiceSettings.setBackend(context, backend)
+                        },
+                        enabled = !speaking && !downloading,
+                        label = { Text("GPU (Vulkan)") }
+                    )
+                }
+                Text("GPUは実験的機能です。端末で使用できない場合はCPUに戻してください。", style = MaterialTheme.typography.bodySmall)
                 HorizontalDivider()
                 Text("Personaの声: " + if (referenceReady) "設定済み" else "未設定")
                 OutlinedButton(
@@ -116,7 +151,7 @@ fun JinkakuVoiceDialog(vm: JinkakuViewModel, onDismiss: () -> Unit) {
         confirmButton = {
             Button(onClick = {
                 speaking = true
-                status = "音声を生成中（CPU処理）"
+                status = "音声を生成中（" + backend + "処理）"
                 currentJob = scope.launch {
                     try {
                         runtime.speak(lastAssistant, persona)
