@@ -68,6 +68,16 @@ if (QWEN3_ANDROID_VULKAN AND CMAKE_CROSSCOMPILING)
 endif()
 add_subdirectory("${GGML_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/ggml")
 
+if (QWEN3_ANDROID_VULKAN)
+    # Android's Vulkan NDK headers omit C++ Vulkan-Hpp. GitHub Actions stages
+    # the Vulkan-Hpp header directory without adding /usr/include to the
+    # Android compiler's search path.
+    set(_qwen3_vulkan_hpp "${CMAKE_CURRENT_LIST_DIR}/../../../../.ci-vulkan-hpp")
+    if (EXISTS "${_qwen3_vulkan_hpp}/vulkan/vulkan.hpp")
+        target_include_directories(ggml-vulkan PRIVATE "${_qwen3_vulkan_hpp}")
+    endif()
+endif()
+
 find_package(Threads REQUIRED)
 
 function(qwen3_link_ggml target_name)
