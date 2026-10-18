@@ -48,6 +48,7 @@ jobs:
           # Isolate these host header files so Android's sysroot remains first.
           mkdir -p "$GITHUB_WORKSPACE/.ci-vulkan-hpp/vulkan"
           cp -a /usr/include/vulkan/. "$GITHUB_WORKSPACE/.ci-vulkan-hpp/vulkan/"
+          cp -a /usr/include/spirv "$GITHUB_WORKSPACE/.ci-vulkan-hpp/spirv"
       - name: Apply legacy source patches
         run: |
           python3 scripts/patch_cpu_speed_v022.py
