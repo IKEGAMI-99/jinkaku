@@ -31,6 +31,7 @@ fun JinkakuVoiceDialog(vm: JinkakuViewModel, onDismiss: () -> Unit) {
     var downloading by remember { mutableStateOf(false) }
     var speaking by remember { mutableStateOf(false) }
     var referenceReady by remember { mutableStateOf(runtime.referenceFor(persona).exists()) }
+    var showDesigner by remember { mutableStateOf(false) }
     var currentJob by remember { mutableStateOf<Job?>(null) }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -56,6 +57,19 @@ fun JinkakuVoiceDialog(vm: JinkakuViewModel, onDismiss: () -> Unit) {
 
     DisposableEffect(runtime) {
         onDispose { runtime.stop() }
+    }
+
+    if (showDesigner) {
+        PersonaVoiceDesignerDialog(
+            persona = persona,
+            onDismiss = { showDesigner = false },
+            onVoiceSaved = {
+                referenceReady = true
+                status = "Personaから生成した声を保存しました"
+                showDesigner = false
+            },
+        )
+        return
     }
 
     AlertDialog(
@@ -85,6 +99,10 @@ fun JinkakuVoiceDialog(vm: JinkakuViewModel, onDismiss: () -> Unit) {
                     onClick = { picker.launch(arrayOf("audio/wav", "audio/x-wav", "audio/*")) },
                     enabled = !downloading && !speaking
                 ) { Text("参照音声を選ぶ（WAV）") }
+                OutlinedButton(
+                    onClick = { showDesigner = true },
+                    enabled = !downloading && !speaking
+                ) { Text("Personaから声を自動生成（1.7B）") }
                 Text("短いPCM WAV音声を登録すると、そのPersonaに声を固定できます。本人の許可がある音声だけを使用してください。",
                     style = MaterialTheme.typography.bodySmall)
                 HorizontalDivider()
