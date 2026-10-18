@@ -40,6 +40,11 @@ jobs:
             "build-tools;35.0.0" \
             "ndk;29.0.13113456" \
             "cmake;3.31.6"
+      - name: Install Vulkan host shader headers
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends spirv-headers
+          test -f /usr/share/cmake/SPIRV-Headers/SPIRV-HeadersConfig.cmake
       - name: Apply legacy source patches
         run: |
           python3 scripts/patch_cpu_speed_v022.py
