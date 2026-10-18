@@ -405,19 +405,32 @@ private fun ModernChatScreen(vm: JinkakuViewModel, modifier: Modifier = Modifier
     val voice = remember(context) { QwenVoiceRuntime(context) }
     val lastReply = ui.messages.lastOrNull { it.role == ROLE_ASSISTANT }
     var lastSpokenId by remember { mutableStateOf(ui.messages.lastOrNull { it.role == ROLE_ASSISTANT }?.id) }
+    var inferenceStarted by remember { mutableStateOf(ui.busy) }
     var voiceJob by remember { mutableStateOf<Job?>(null) }
     LaunchedEffect(lastReply?.id, ui.busy, voice.autoRead, voice.ready) {
-        if (!ui.busy && lastReply != null && lastReply.id != lastSpokenId) {
-            lastSpokenId = lastReply.id
+        if (ui.busy) {
+            inferenceStarted = true
             voiceJob?.cancel()
             voice.stop()
-            if (voice.autoRead && voice.ready) {
-                val persona = vm.currentPersona()
-                voiceJob = launch {
-                    try { voice.speak(lastReply.content, persona) }
-                    catch (e: Exception) { android.util.Log.w("JinkakuVoice", "Auto read failed", e) }
+        } else if (inferenceStarted) {
+            // Only read after a genuine generation cycle, not when old chat history loads.
+            inferenceStarted = false
+            if (lastReply != null && lastReply.id != lastSpokenId) {
+                lastSpokenId = lastReply.id
+                if (voice.autoRead && voice.ready) {
+                    val persona = vm.currentPersona()
+                    voiceJob = launch {
+                        try { voice.speak(lastReply.content, persona) }
+                        catch (e: Exception) {
+                            if (e !is kotlinx.coroutines.CancellationException)
+                                android.util.Log.w("JinkakuVoice", "Auto read failed", e)
+                        }
+                    }
                 }
             }
+        } else {
+            // Keep track of history updates without treating them as new replies.
+            lastSpokenId = lastReply?.id
         }
     }
     DisposableEffect(voice) { onDispose { voiceJob?.cancel(); voice.stop() } }
