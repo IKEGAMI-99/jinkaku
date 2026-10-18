@@ -12,7 +12,7 @@ android {
         externalNativeBuild {
             cmake {
                 targets += "qwen3_tts_jni"
-                arguments += listOf("-DANDROID_STL=c++_shared", "-DQWEN3_ANDROID_OPENMP=OFF", "-DQWEN3_ANDROID_VULKAN=ON", "-DQWEN3_ANDROID_OPENCL=OFF")
+                arguments += listOf("-DANDROID_STL=c++_shared", "-DQWEN3_ANDROID_OPENMP=OFF", "-DQWEN3_ANDROID_VULKAN=OFF", "-DQWEN3_ANDROID_OPENCL=OFF")
             }
         }
     }

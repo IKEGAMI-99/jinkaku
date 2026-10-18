@@ -11,7 +11,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.ikegami99.jinkaku.JinkakuViewModel
-import com.qwen.tts.studio.engine.QwenEngine
 import com.ikegami99.jinkaku.data.ROLE_ASSISTANT
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -34,8 +33,6 @@ fun JinkakuVoiceDialog(vm: JinkakuViewModel, onDismiss: () -> Unit) {
     var referenceReady by remember { mutableStateOf(runtime.referenceFor(persona).exists()) }
     var showDesigner by remember { mutableStateOf(false) }
     var autoRead by remember { mutableStateOf(runtime.autoRead) }
-    var selectedBackend by remember { mutableIntStateOf(runtime.backend) }
-    val gpuAvailable = remember(runtime) { runtime.gpuAvailable() }
     var currentJob by remember { mutableStateOf<Job?>(null) }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -106,20 +103,9 @@ fun JinkakuVoiceDialog(vm: JinkakuViewModel, onDismiss: () -> Unit) {
                     })
                 }
                 Text("音声処理", style = MaterialTheme.typography.titleSmall)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(selected = selectedBackend == QwenEngine.BACKEND_CPU,
-                        onClick = { selectedBackend = QwenEngine.BACKEND_CPU; runtime.backend = selectedBackend },
-                        label = { Text("CPU") })
-                    FilterChip(selected = selectedBackend == QwenEngine.BACKEND_GPU,
-                        onClick = { selectedBackend = QwenEngine.BACKEND_GPU; runtime.backend = selectedBackend },
-                        enabled = gpuAvailable, label = { Text("GPU (Vulkan)") })
-                }
-                if (!gpuAvailable) {
-                    Text("GPUを利用できないためCPUで動作します。", style = MaterialTheme.typography.bodySmall)
-                } else if (selectedBackend == QwenEngine.BACKEND_GPU) {
-                    Text("Vulkan対応GPUを優先し、利用できない場合はCPUへ切り替えます。",
-                        style = MaterialTheme.typography.bodySmall)
-                }
+                Text("CPU（安定動作モード）", style = MaterialTheme.typography.bodyMedium)
+                Text("Qwen3-TTSのVulkan計算でアプリが強制終了する問題を回避するため、音声生成のみCPU固定です。通常チャットのGPU処理は変更しません。",
+                    style = MaterialTheme.typography.bodySmall)
                 HorizontalDivider()
                 Text("Personaの声: " + if (referenceReady) "設定済み" else "未設定")
                 OutlinedButton(
