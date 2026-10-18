@@ -67,6 +67,19 @@ if (QWEN3_ANDROID_VULKAN AND CMAKE_HOST_UNIX AND NOT APPLE)
 endif()
 add_subdirectory("${GGML_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/ggml")
 
+# NDK ships Vulkan C headers, but not Vulkan-Hpp (vulkan/vulkan.hpp).
+# Copy only the host Vulkan headers into an isolated staging include directory
+# to prevent Android clang from accidentally resolving host glibc headers.
+if (QWEN3_ANDROID_VULKAN AND CMAKE_HOST_UNIX AND NOT APPLE)
+    if (NOT EXISTS "/usr/include/vulkan/vulkan.hpp")
+        message(FATAL_ERROR "Vulkan-Hpp C++ headers not found: install libvulkan-dev")
+    endif()
+    set(_qwen_vulkan_hpp_root "${CMAKE_CURRENT_BINARY_DIR}/vulkan-hpp-staging")
+    file(MAKE_DIRECTORY "${_qwen_vulkan_hpp_root}")
+    file(COPY "/usr/include/vulkan" DESTINATION "${_qwen_vulkan_hpp_root}")
+    target_include_directories(ggml-vulkan BEFORE PRIVATE "${_qwen_vulkan_hpp_root}")
+endif()
+
 find_package(Threads REQUIRED)
 
 function(qwen3_link_ggml target_name)
